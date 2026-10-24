@@ -1,0 +1,61 @@
+# Push a tag like v0.2.0 (matching "version" in tauri.conf.json) to publish a release.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Check the tag matches the app version
+        shell: pwsh
+        run: |
+          $version = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          if ("v$version" -ne $env:GITHUB_REF_NAME) {
+            throw "tauri.conf.json says $version but the tag is $env:GITHUB_REF_NAME"
+          }
+
+      - name: Test
+        working-directory: src-tauri
+        run: cargo test
+
+      - name: Build installer
+        working-directory: src-tauri
+        run: npx --yes @tauri-apps/cli@2 build
+
+      - name: Publish release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          $version = $tag.TrimStart('v')
+          # Stable names, so install.ps1 and README links can use releases/latest/download/…
+          Copy-Item "src-tauri/target/release/bundle/nsis/tradu_${version}_x64-setup.exe" tradu-setup.exe
+          Copy-Item src-tauri/target/release/tradu.exe tradu-portable.exe
+          $notes = @"
+          ## Install
+
+          Paste into PowerShell. It installs for your user (no admin) and starts tradu:
+
+          ``````powershell
+          irm https://raw.githubusercontent.com/kayfgit/tradu/main/install.ps1 | iex
+          ``````
+
+          Or download **tradu-setup.exe** below, or **tradu-portable.exe** to run without installing.
+          Then press **Ctrl+Shift+Space** anywhere.
+          "@
+          gh release create $tag tradu-setup.exe tradu-portable.exe --title "tradu $tag" --notes $notes

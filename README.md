@@ -4,6 +4,24 @@ A popup translator for people who live on the keyboard. Press a hotkey from anyw
 
 If text is selected when you press the hotkey, it's already in the popup and being translated.
 
+![tradu: translate a selected message, then reply in English and paste it back in Spanish](docs/demo.gif)
+
+## Install
+
+Paste this into PowerShell. It installs tradu for your user (no admin rights, no clicks) and starts it:
+
+```powershell
+irm https://raw.githubusercontent.com/kayfgit/tradu/main/install.ps1 | iex
+```
+
+Then press **Ctrl+Shift+Space** anywhere. Run the same command again to update.
+
+You can also download [tradu-setup.exe](https://github.com/kayfgit/tradu/releases/latest/download/tradu-setup.exe), or [tradu-portable.exe](https://github.com/kayfgit/tradu/releases/latest/download/tradu-portable.exe) to run it without installing. tradu needs Windows 10 or 11.
+
+To uninstall, use **Settings › Apps**, or run `& "$env:LOCALAPPDATA\tradu\uninstall.exe"`.
+
+## Features
+
 - **Instant:** it stays resident in the tray, and the popup takes focus about 30 ms after the hotkey.
 - **Live:** it translates as you type, and Enter always copies the result for exactly what's on screen.
 - **Learner-friendly:** it shows romanization (`家` → *Ie*), dictionary alternatives for single words, and pronunciation.
@@ -95,6 +113,20 @@ cargo test -- --include-ignored   # includes one live network test
 ```
 
 For the installer, run `cargo install tauri-cli --version "^2" --locked` once, then `cargo tauri build`. The installer is written to `target/release/bundle/nsis/`. It installs for the current user only, so it doesn't need admin rights.
+
+### Releasing
+
+Bump `version` in `src-tauri/tauri.conf.json`, commit, then push a matching tag:
+
+```bash
+git tag v0.2.0
+```
+
+```bash
+git push origin v0.2.0
+```
+
+The [release workflow](.github/workflows/release.yml) builds on GitHub and publishes `tradu-setup.exe` and `tradu-portable.exe` to a new release. The install command always fetches the latest release.
 
 To iterate on the UI without rebuilding, serve `src/` (for example `python -m http.server -d src`) and open it in a browser. The page detects that it isn't inside Tauri and calls Google directly.
 
