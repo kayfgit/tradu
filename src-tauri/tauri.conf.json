@@ -1,0 +1,50 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "tradu",
+  "version": "0.1.0",
+  "identifier": "com.tradu.translator",
+  "build": {
+    "frontendDist": "../src"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "tradu",
+        "width": 680,
+        "height": 420,
+        "visible": false,
+        "decorations": false,
+        "resizable": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "shadow": true,
+        "center": true,
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --enable-features=NetworkServiceInProcess2 --disable-gpu --in-process-gpu --disable-background-networking --disable-component-update"
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; media-src https://translate.googleapis.com; connect-src ipc: http://ipc.localhost"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "category": "Utility",
+    "shortDescription": "Keyboard-driven popup translator",
+    "longDescription": "Press a hotkey anywhere, type or select text, and get the translation on your clipboard without touching the mouse.",
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    },
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.png",
+      "icons/icon.ico"
+    ]
+  }
+}

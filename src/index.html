@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>tradu</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="langs.js" defer></script>
+  <script src="main.js" defer></script>
+</head>
+<body>
+  <header data-tauri-drag-region>
+    <button id="from" class="lang" tabindex="-1" title="Source language (Ctrl+F)"></button>
+    <button id="swap" tabindex="-1" title="Swap languages (Ctrl+S)">⇄</button>
+    <button id="to" class="lang" tabindex="-1" title="Target language (Ctrl+T)"></button>
+    <span id="status" role="status"></span>
+  </header>
+
+  <div id="picker" hidden>
+    <input id="query" autocomplete="off" spellcheck="false" placeholder="Type a language or code">
+    <ol id="matches"></ol>
+  </div>
+
+  <main>
+    <section class="source">
+      <textarea id="input" dir="auto" rows="1" spellcheck="false" placeholder="Type to translate"></textarea>
+      <p id="src-translit" class="translit"></p>
+    </section>
+    <section class="target">
+      <textarea id="output" dir="auto" rows="1" readonly tabindex="-1" aria-label="Translation"></textarea>
+      <p id="translit" class="translit"></p>
+      <div id="dict"></div>
+    </section>
+  </main>
+
+  <footer id="hints"></footer>
+</body>
+</html>
