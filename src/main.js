@@ -84,36 +84,54 @@ let dictTerms = [];      // alternatives in Alt+1..9 order
 const cache = new Map();
 let pending = null;
 let timer = 0;
+let pickedKey = null; // input + languages right after an explicit language pick
+let requestSeq = 0;   // order of translation requests…
+let shownSeq = 0;     // …and of the one on screen, so a slow reply never replaces a newer one
 
 const keyOf = () => `${store.from}\n${store.to}\n${el.input.value}`;
 
 /** Translates the current input right away (or reuses a cached/in-flight result). */
 function translateNow() {
   clearTimeout(timer);
+  typingSince = 0;
   const text = el.input.value;
   const key = keyOf();
   if (!text.trim()) {
+    shownSeq = ++requestSeq;
     show(null);
     return Promise.resolve(null);
   }
   if (cache.has(key)) {
+    shownSeq = ++requestSeq;
     show(cache.get(key));
     return Promise.resolve(cache.get(key));
   }
   if (pending?.key === key) return pending.promise;
 
+  const seq = ++requestSeq;
+  const langs = `${store.from}\n${store.to}\n`;
   const promise = api.translate(text, store.from, store.to).then(
     result => {
       cache.set(key, result);
       if (cache.size > 300) cache.delete(cache.keys().next().value);
-      if (keyOf() !== key) return result;
-      // Typed in the target language: flip to the other side of the user's pair.
-      const flip = store.from === 'auto' && canon(result.detected ?? '') === store.to && alternateTarget();
+      if (keyOf() !== key) {
+        // Still typing: show this in-between result (dimmed) unless a newer one is up.
+        if (seq > shownSeq && keyOf().startsWith(langs)) {
+          shownSeq = seq;
+          show(result, { stale: true });
+        }
+        return result;
+      }
+      // Typed in the target language: flip to the other side of the user's pair
+      // (but not for the text that was on screen when they picked the target).
+      const flip = store.from === 'auto' && key !== pickedKey
+        && canon(result.detected ?? '') === store.to && alternateTarget();
       if (flip) {
         store.to = flip;
         saveStore();
         return translateNow();
       }
+      shownSeq = seq;
       show(result);
       return result;
     },
@@ -132,16 +150,23 @@ async function settled() {
   try { return await translateNow(); } catch { return null; }
 }
 
+// While the user keeps typing, still translate at least this often.
+const MAX_WAIT_MS = 600;
+let typingSince = 0;
+
 function scheduleTranslation() {
   clearTimeout(timer);
   if (!el.input.value.trim()) return translateNow();
   document.body.classList.add('stale');
-  timer = setTimeout(translateNow, config.debounce_ms);
+  typingSince ||= Date.now();
+  const delay = Math.min(config.debounce_ms, typingSince + MAX_WAIT_MS - Date.now());
+  timer = setTimeout(() => translateNow().catch(() => {}), Math.max(0, delay));
 }
 
-function show(result) {
+/** `stale`: the result is for an earlier version of the input. */
+function show(result, { stale = false } = {}) {
   current = result;
-  document.body.classList.remove('stale');
+  document.body.classList.toggle('stale', stale);
   el.output.value = result?.text ?? '';
   el.translit.textContent = result?.translit ?? '';
   el.srcTranslit.textContent = result?.src_translit ?? '';
@@ -198,6 +223,7 @@ function setLang(which, code) {
   }
   store[which] = code;
   store.recent[which] = [code, ...store.recent[which].filter(c => c !== code)].slice(0, 9);
+  pickedKey = keyOf();
   saveStore();
   renderLangs();
   translateNow().catch(() => {});
