@@ -2,6 +2,8 @@
 name = "tradu"
 version = "0.1.0"
 description = "Keyboard-driven popup translator"
+license = "MIT"
+repository = "https://github.com/kayfgit/tradu"
 edition = "2021"
 
 [build-dependencies]

@@ -107,3 +107,7 @@ To iterate on the UI without rebuilding, serve `src/` (for example `python -m ht
 **Why not a GPU-native toolkit (egui, iced)?** A translator has to render *every* script correctly: Arabic and Hebrew right-to-left, Devanagari and Thai shaping, CJK glyph variants. It also needs working IME input for Japanese, Chinese and Korean. The system web engine gets all of that right for free, and the lighter toolkits still don't.
 
 Translations come from Google Translate's keyless public endpoint. It's free and fast, but unofficial, so heavy use can get you rate-limited.
+
+## License
+
+[MIT](LICENSE)
