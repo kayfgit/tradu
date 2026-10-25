@@ -21,7 +21,7 @@ function tauriApi() {
     paste: text => invoke('paste', { text }),
     hide: () => invoke('hide'),
     config: () => invoke('ui_config'),
-    setAzure: (key, region) => invoke('set_azure', { key, region }),
+    setDeepl: key => invoke('set_deepl', { key }),
     on: (event, fn) => window.__TAURI__.event.listen(event, fn),
   };
 }
@@ -55,15 +55,15 @@ function browserApi() {
     copy: text => navigator.clipboard.writeText(text),
     paste: text => navigator.clipboard.writeText(text),
     hide: async () => {},
-    config: async () => ({ start_in: 'input', debounce_ms: 400, hotkey: '', hotkey_error: null, azure: false }),
-    setAzure: async () => { throw 'Azure needs the app, not the browser preview'; },
+    config: async () => ({ start_in: 'input', debounce_ms: 400, hotkey: '', hotkey_error: null, deepl: false }),
+    setDeepl: async () => { throw 'DeepL needs the app, not the browser preview'; },
     on: () => {},
   };
 }
 
 // ---------------------------------------------------------------- state
 
-let config = { start_in: 'input', debounce_ms: 400, hotkey: '', hotkey_error: null, azure: false };
+let config = { start_in: 'input', debounce_ms: 400, hotkey: '', hotkey_error: null, deepl: false };
 
 const HISTORY_MAX = 50;
 
@@ -402,7 +402,7 @@ const HELP = [
   [':ja', 'translate into Japanese'],
   [':de en', 'German into English (auto for detect)'],
   [':swap :clear', 'swap languages, clear history'],
-  [':azure KEY REGION', 'use your Azure key while Google is limiting'],
+  [':deepl KEY', 'use your DeepL key while Google is limiting'],
 ];
 
 function showHelp() {
@@ -453,7 +453,7 @@ function parseCommand(line) {
     return { label: `clear history (${store.history.length})`, run: clearHistory };
   }
   if (words.length === 1 && ['help', 'h', '?'].includes(first)) return { label: 'list keys and commands', run: showHelp };
-  if (first === 'azure') return azureCommand(line.trim().split(/\s+/).slice(1));
+  if (first === 'deepl') return deeplCommand(line.trim().split(/\s+/).slice(1));
   if (words.length > 2) return { error: 'give one language (target) or two (source and target)' };
   const langs = words.map((w, i) => resolveLang(w, words.length === 2 && i === 0 ? 'from' : 'to'));
   const unknown = words.find((_, i) => !langs[i]);
@@ -462,26 +462,28 @@ function parseCommand(line) {
   return { label: `${nameOf(langs[0])} → ${nameOf(langs[1])}`, run: () => setPair(langs[0], langs[1]) };
 }
 
-/** `:azure KEY [REGION]` saves an Azure Translator key (checked first); `:azure off` removes it. */
-function azureCommand([key, region = '']) {
+/** `:deepl KEY` saves a DeepL API key (checked first); `:deepl off` removes it. */
+function deeplCommand([key]) {
   if (!key) {
-    return { label: config.azure ? 'Azure is set up. :azure off removes it' : 'paste your Azure Translator key, then its region' };
+    return { label: config.deepl ? 'DeepL is set up. :deepl off removes it' : 'paste your DeepL API key' };
   }
-  if (key.toLowerCase() === 'off') return { label: 'stop using Azure', run: () => saveAzure('', '') };
-  const masked = `${'•'.repeat(4)}${key.slice(-4)}`;
+  if (key.toLowerCase() === 'off') return { label: 'stop using DeepL', run: () => saveDeepl('') };
   return {
-    label: `use Azure key ${masked}${region ? ` in ${region}` : ' (add the region if it isn\'t global)'} while Google is limiting`,
-    run: () => saveAzure(key, region),
+    label: `use DeepL key ••••${key.slice(-6)} while Google is limiting`,
+    run: () => saveDeepl(key),
   };
 }
 
-async function saveAzure(key, region) {
-  setStatus(key ? 'checking the Azure key…' : '');
+async function saveDeepl(key) {
+  setStatus(key ? 'checking the DeepL key…' : '');
   try {
-    await api.setAzure(key, region);
-    config.azure = !!key;
-    setStatus(key ? 'azure key works and is saved' : 'azure removed', 'done');
-    setTimeout(() => statusKind === 'done' && setStatus(''), 3000);
+    const usage = await api.setDeepl(key);
+    config.deepl = !!key;
+    const quota = usage?.limit
+      ? `, ${usage.used.toLocaleString('en')} of ${usage.limit.toLocaleString('en')} characters used this month`
+      : '';
+    setStatus(key ? `deepl key works and is saved${quota}` : 'deepl removed', 'done');
+    setTimeout(() => statusKind === 'done' && setStatus(''), 5000);
   } catch (err) {
     setStatus(String(err?.message ?? err), 'error');
   }
@@ -882,7 +884,7 @@ function renderInfo() {
   if (!text) {
     const parts = [`history ${store.history.length}`];
     if (store.from === 'auto') parts.push('auto-detect');
-    if (current?.provider === 'azure') parts.push('via azure');
+    if (current?.provider === 'deepl') parts.push('via deepl');
     text = parts.join('   ');
   }
   el.info.textContent = text;

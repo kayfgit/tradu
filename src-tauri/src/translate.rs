@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::azure::{self, Azure};
+use crate::deepl::{self, Deepl};
 use crate::romaji;
 
 const ENDPOINT: &str = "https://translate.googleapis.com/translate_a/single";
@@ -38,7 +38,7 @@ pub struct Translation {
     pub dict: Vec<DictEntry>,
     /// Set when what was translated isn't exactly what was typed.
     pub correction: Option<Correction>,
-    /// "google" or "azure".
+    /// "google" or "deepl".
     pub provider: &'static str,
 }
 
@@ -93,7 +93,7 @@ pub struct Request<'a> {
 pub struct Translator {
     client: reqwest::Client,
     cooldown: Mutex<Cooldown>,
-    azure: Mutex<Option<Azure>>,
+    deepl: Mutex<Option<Deepl>>,
 }
 
 #[derive(Default)]
@@ -105,7 +105,7 @@ struct Cooldown {
 #[derive(Clone, Copy)]
 enum Provider<'a> {
     Google,
-    Azure(&'a Azure),
+    Deepl(&'a Deepl),
 }
 
 impl Translator {
@@ -117,26 +117,27 @@ impl Translator {
             .pool_idle_timeout(Duration::from_secs(300))
             .build()
             .expect("http client");
-        Self { client, cooldown: Mutex::default(), azure: Mutex::default() }
+        Self { client, cooldown: Mutex::default(), deepl: Mutex::default() }
     }
 
-    pub fn set_azure(&self, azure: Option<Azure>) {
-        *self.azure.lock().unwrap() = azure;
+    pub fn set_deepl(&self, deepl: Option<Deepl>) {
+        *self.deepl.lock().unwrap() = deepl;
     }
 
-    pub async fn check_azure(&self, azure: &Azure) -> Result<(), Error> {
-        azure::check(&self.client, azure).await
+    /// Checks a DeepL key without spending characters.
+    pub async fn deepl_usage(&self, deepl: &Deepl) -> Result<deepl::Usage, Error> {
+        deepl::usage(&self.client, deepl).await
     }
 
-    /// Google's free endpoint, or the user's Azure key: always if they chose
+    /// Google's free endpoint, or the user's DeepL key: always if they chose
     /// that, otherwise while Google is rate-limiting (no request goes to Google
     /// during its cooldown).
     pub async fn translate(&self, req: Request<'_>) -> Result<Translation, Error> {
-        let azure = self.azure.lock().unwrap().clone();
-        match &azure {
-            Some(a) if a.always => self.pipeline(req, Provider::Azure(a)).await,
-            Some(a) => match self.pipeline(req, Provider::Google).await {
-                Err(e) if e.retry_in_ms.is_some() => self.pipeline(req, Provider::Azure(a)).await,
+        let deepl = self.deepl.lock().unwrap().clone();
+        match &deepl {
+            Some(d) if d.always => self.pipeline(req, Provider::Deepl(d)).await,
+            Some(d) => match self.pipeline(req, Provider::Google).await {
+                Err(e) if e.retry_in_ms.is_some() => self.pipeline(req, Provider::Deepl(d)).await,
                 result => result,
             },
             None => self.pipeline(req, Provider::Google).await,
@@ -206,7 +207,7 @@ impl Translator {
     async fn raw(&self, provider: Provider<'_>, text: &str, from: &str, to: &str) -> Result<Translation, Error> {
         match provider {
             Provider::Google => self.gtx(text, from, to).await,
-            Provider::Azure(azure) => azure::translate(&self.client, azure, text, from, to).await,
+            Provider::Deepl(deepl) => deepl::translate(&self.client, deepl, text, from, to).await,
         }
     }
 
@@ -458,12 +459,12 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "hits the network"]
-    async fn live_falls_back_to_azure_while_google_cools_down() {
+    async fn live_falls_back_to_deepl_while_google_cools_down() {
         let t = Translator::new();
         t.rate_limited(None); // Google is cooling down: no request may go there
-        t.set_azure(Some(Azure { key: "not-a-real-key".into(), region: "westeurope".into(), always: false }));
+        t.set_deepl(Some(Deepl { key: "00000000-0000-0000-0000-000000000000:fx".into(), always: false }));
         let err = t.translate(request("house", "es", &[])).await.unwrap_err();
-        assert!(err.message.contains("Azure rejected the key"), "{err:?}");
+        assert!(err.message.contains("DeepL rejected the key"), "{err:?}");
     }
 
     #[tokio::test]

@@ -1,7 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod azure;
 mod config;
+mod deepl;
 mod origin;
 mod romaji;
 mod translate;
@@ -39,8 +39,8 @@ struct UiConfig {
     hotkey_error: Option<String>,
     start_in: String,
     debounce_ms: u64,
-    /// Whether an Azure key is set up.
-    azure: bool,
+    /// Whether a DeepL key is set up.
+    deepl: bool,
 }
 
 #[tauri::command]
@@ -71,28 +71,28 @@ fn ui_config(state: State<'_, AppState>) -> UiConfig {
         hotkey_error: state.hotkey_error.lock().unwrap().clone(),
         start_in: config.start_in.clone(),
         debounce_ms: config.debounce_ms,
-        azure: !config.azure_key.is_empty(),
+        deepl: !config.deepl_key.is_empty(),
     }
 }
 
-/// Saves an Azure key after checking it works; an empty key removes it.
+/// Saves a DeepL key after checking it works, returning this month's usage;
+/// an empty key removes it.
 #[tauri::command]
-async fn set_azure(
+async fn set_deepl(
     app: AppHandle,
     state: State<'_, AppState>,
     key: String,
-    region: String,
-) -> Result<(), String> {
+) -> Result<Option<deepl::Usage>, String> {
     let mut config = state.config.lock().unwrap().clone();
-    config.azure_key = key.trim().to_owned();
-    config.azure_region = region.trim().to_owned();
-    if let Some(azure) = config.azure() {
-        state.translator.check_azure(&azure).await.map_err(|e| e.message)?;
-    }
+    config.deepl_key = key.trim().to_owned();
+    let usage = match config.deepl() {
+        Some(deepl) => Some(state.translator.deepl_usage(&deepl).await.map_err(|e| e.message)?),
+        None => None,
+    };
     config::save(&app, &config).map_err(|e| format!("Couldn't save the config: {e}"))?;
-    state.translator.set_azure(config.azure());
+    state.translator.set_deepl(config.deepl());
     *state.config.lock().unwrap() = config;
-    Ok(())
+    Ok(usage)
 }
 
 #[tauri::command]
@@ -234,7 +234,7 @@ fn register_hotkey(app: &AppHandle) {
 fn reload_config(app: &AppHandle) {
     let state = app.state::<AppState>();
     let config = config::load(app);
-    state.translator.set_azure(config.azure());
+    state.translator.set_deepl(config.deepl());
     *state.config.lock().unwrap() = config;
     register_hotkey(app);
     let _ = app.emit("config-changed", ());
@@ -315,7 +315,7 @@ fn main() {
             let handle = app.handle();
             let config = config::load(handle);
             let translator = translate::Translator::new();
-            translator.set_azure(config.azure());
+            translator.set_deepl(config.deepl());
             app.manage(AppState {
                 translator,
                 config: Mutex::new(config),
@@ -348,7 +348,7 @@ fn main() {
             }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![translate, ui_config, set_azure, copy, hide, paste])
+        .invoke_handler(tauri::generate_handler![translate, ui_config, set_deepl, copy, hide, paste])
         .run(tauri::generate_context!())
         .expect("error while running tradu");
 }

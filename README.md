@@ -72,7 +72,7 @@ Type **:** on an empty line, then press **Enter** to run the command. A preview 
 | `:de en` | Translate German into English (`:auto en` to detect the source) |
 | `:swap` | Swap the languages |
 | `:clear` | Clear the history |
-| `:azure KEY REGION` | Use your Azure Translator key while Google is limiting (`:azure off` removes it) |
+| `:deepl KEY` | Use your DeepL API key while Google is limiting (`:deepl off` removes it) |
 | `:help` | List the keys and commands |
 
 Languages match fuzzily, like in the picker: `:german english` and `:deu eng` work too.
@@ -116,16 +116,17 @@ Google's free endpoint limits how often one connection can ask. tradu keeps its 
 
 If Google does refuse, tradu stops asking for a while (30 s at first, doubling up to 30 minutes) instead of retrying on every keystroke, which would keep the block going. The status bar shows a countdown, and the translation retries by itself when it ends, but only while the popup is open: nothing is retried in the background. A block can last hours; it lifts on its own as long as nothing keeps poking it.
 
-### Azure fallback (optional)
+### DeepL fallback (optional)
 
-If Google's limit keeps getting in your way, give tradu a free Microsoft Azure Translator key. tradu still uses Google normally and switches to Azure only while Google is refusing, so the free quota lasts. The status bar shows `via azure` when Azure translated what's on screen.
+If Google's limit keeps getting in your way, give tradu a free DeepL API key. tradu still uses Google normally and switches to DeepL only while Google is refusing, so the free quota lasts. The status bar shows `via deepl` when DeepL translated what's on screen.
 
-1. Sign in to the [Azure portal](https://portal.azure.com). A free account asks for a card to verify you, but the Free tier below never charges.
-2. Create a **Translator** resource with the pricing tier **Free F0** (2 million characters a month), in a region near you.
-3. In the resource, open **Keys and Endpoint** and copy **KEY 1** and the **Location/Region**.
-4. In tradu, type `:azure <key> <region>` on an empty line and press Enter. tradu checks the key and saves it.
+1. Sign up for **DeepL API Free** at [deepl.com/pro-api](https://www.deepl.com/pro-api). It asks for a card to verify you, but the Free plan is capped at 500,000 characters a month and never charges.
+2. In your DeepL account, open **API Keys** and copy the key (free keys end in `:fx`).
+3. In tradu, type `:deepl <key>` on an empty line and press Enter. tradu checks the key, without spending characters, and shows how much of this month's quota you've used.
 
-`:azure off` removes the key. To use Azure for everything, set `"translator": "azure"` in the config. With Azure, romaji is still written in Japanese first and single English words get dictionary alternatives, but typos aren't corrected.
+`:deepl off` removes the key. To use DeepL for everything, set `"translator": "deepl"` in the config.
+
+DeepL covers about 35 languages, including English, German, Spanish, French, Portuguese, Japanese, Korean and Chinese. For a language it doesn't cover, tradu says so. Through DeepL, romaji is still written in Japanese first, but there are no typo corrections, romanizations or dictionary alternatives.
 
 ### How the selection is read
 
@@ -148,16 +149,15 @@ Open it from the tray with **Edit config**, then use **Reload config** to apply 
   "hide_on_blur": true,
   "debounce_ms": 400,
   "translator": "google",
-  "azure_key": "",
-  "azure_region": ""
+  "deepl_key": ""
 }
 ```
 
 - `start_in`: `"input"` (default) opens straight into the text box with your last languages. `"source"` opens in the source picker, then the target picker, then the input.
 - `hotkey`: modifiers `Ctrl`, `Shift`, `Alt` and `Super`, plus a key such as `Space`, `T`, `F9` or `Backquote`.
 - `debounce_ms`: how long a pause in typing triggers a translation. Lower feels snappier but sends more requests, so you hit Google's rate limit sooner.
-- `translator`: `"google"` (default) uses Google's free endpoint, and Azure while Google is limiting if a key is set. `"azure"` always uses Azure.
-- `azure_key`, `azure_region`: your Azure Translator key, normally set with `:azure` (see [Azure fallback](#azure-fallback-optional)).
+- `translator`: `"google"` (default) uses Google's free endpoint, and DeepL while Google is limiting if a key is set. `"deepl"` always uses DeepL.
+- `deepl_key`: your DeepL API key, normally set with `:deepl` (see [DeepL fallback](#deepl-fallback-optional)).
 
 The tray menu also has **Start at login**.
 

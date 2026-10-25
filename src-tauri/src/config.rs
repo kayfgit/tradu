@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager};
 
-use crate::azure::Azure;
+use crate::deepl::Deepl;
 
 /// User-editable settings, stored as JSON in the app's config dir.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -17,12 +17,11 @@ pub struct Config {
     pub hide_on_blur: bool,
     /// Pause after the last keystroke before translating.
     pub debounce_ms: u64,
-    /// "google": the free endpoint, with Azure (if set up) while Google is
-    /// rate-limiting. "azure": always Azure.
+    /// "google": the free endpoint, with DeepL (if set up) while Google is
+    /// rate-limiting. "deepl": always DeepL.
     pub translator: String,
-    /// Azure Translator key and region, usually set with `:azure KEY REGION`.
-    pub azure_key: String,
-    pub azure_region: String,
+    /// DeepL API key, usually set with `:deepl KEY`.
+    pub deepl_key: String,
 }
 
 impl Default for Config {
@@ -33,18 +32,16 @@ impl Default for Config {
             hide_on_blur: true,
             debounce_ms: 400,
             translator: "google".into(),
-            azure_key: String::new(),
-            azure_region: String::new(),
+            deepl_key: String::new(),
         }
     }
 }
 
 impl Config {
-    pub fn azure(&self) -> Option<Azure> {
-        (!self.azure_key.is_empty()).then(|| Azure {
-            key: self.azure_key.clone(),
-            region: self.azure_region.clone(),
-            always: self.translator == "azure",
+    pub fn deepl(&self) -> Option<Deepl> {
+        (!self.deepl_key.is_empty()).then(|| Deepl {
+            key: self.deepl_key.clone(),
+            always: self.translator == "deepl",
         })
     }
 }
