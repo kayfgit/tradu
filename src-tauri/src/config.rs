@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use tauri::{AppHandle, Manager};
 
 use crate::deepl::Deepl;
+use crate::translate::Mode;
 
 /// User-editable settings, stored as JSON in the app's config dir.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -17,11 +18,15 @@ pub struct Config {
     pub hide_on_blur: bool,
     /// Pause after the last keystroke before translating.
     pub debounce_ms: u64,
-    /// "google": the free endpoint, with DeepL (if set up) while Google is
-    /// rate-limiting. "deepl": always DeepL.
-    pub translator: String,
+    /// "auto": Google, with DeepL (if set up) while Google is rate-limiting.
+    /// "google" or "deepl": only that one. Set with `:use`.
+    pub provider: String,
     /// DeepL API key, usually set with `:deepl KEY`.
     pub deepl_key: String,
+    /// Before 0.2 the provider was "translator": "google" (meaning auto) or
+    /// "deepl". Read once and migrated.
+    #[serde(skip_serializing)]
+    translator: Option<String>,
 }
 
 impl Default for Config {
@@ -31,18 +36,20 @@ impl Default for Config {
             start_in: "input".into(),
             hide_on_blur: true,
             debounce_ms: 400,
-            translator: "google".into(),
+            provider: "auto".into(),
             deepl_key: String::new(),
+            translator: None,
         }
     }
 }
 
 impl Config {
     pub fn deepl(&self) -> Option<Deepl> {
-        (!self.deepl_key.is_empty()).then(|| Deepl {
-            key: self.deepl_key.clone(),
-            always: self.translator == "deepl",
-        })
+        (!self.deepl_key.is_empty()).then(|| Deepl { key: self.deepl_key.clone() })
+    }
+
+    pub fn mode(&self) -> Mode {
+        Mode::parse(&self.provider)
     }
 }
 
@@ -66,8 +73,16 @@ pub fn load(app: &AppHandle) -> Config {
                 eprintln!("Invalid {}: {e}; using defaults", path.display());
                 Config::default()
             });
+            let mut migrated = false;
             if config.debounce_ms == OLD_DEFAULT_DEBOUNCE_MS {
                 config.debounce_ms = Config::default().debounce_ms;
+                migrated = true;
+            }
+            if let Some(old) = config.translator.take() {
+                config.provider = if old == "deepl" { "deepl" } else { "auto" }.into();
+                migrated = true;
+            }
+            if migrated {
                 let _ = std::fs::write(&path, serde_json::to_string_pretty(&config).unwrap());
             }
             config

@@ -90,11 +90,36 @@ pub struct Request<'a> {
     pub as_typed: bool,
 }
 
+/// Which service translates.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Mode {
+    /// Google, and DeepL (if set up) while Google is rate-limiting.
+    Auto,
+    Google,
+    Deepl,
+}
+
+impl Mode {
+    pub fn parse(name: &str) -> Self {
+        match name {
+            "google" => Self::Google,
+            "deepl" => Self::Deepl,
+            _ => Self::Auto,
+        }
+    }
+}
+
 pub struct Translator {
     client: reqwest::Client,
     cooldown: Mutex<Cooldown>,
     deepl: Mutex<Option<Deepl>>,
+    mode: Mutex<Mode>,
+    /// Last DeepL quota lookup, reused for a while.
+    usage: Mutex<Option<(Instant, deepl::Usage)>>,
 }
+
+const USAGE_FRESH: Duration = Duration::from_secs(20);
+const TTS: &str = "https://translate.googleapis.com/translate_tts";
 
 #[derive(Default)]
 struct Cooldown {
@@ -117,11 +142,22 @@ impl Translator {
             .pool_idle_timeout(Duration::from_secs(300))
             .build()
             .expect("http client");
-        Self { client, cooldown: Mutex::default(), deepl: Mutex::default() }
+        Self {
+            client,
+            cooldown: Mutex::default(),
+            deepl: Mutex::default(),
+            mode: Mutex::new(Mode::Auto),
+            usage: Mutex::default(),
+        }
     }
 
     pub fn set_deepl(&self, deepl: Option<Deepl>) {
         *self.deepl.lock().unwrap() = deepl;
+        *self.usage.lock().unwrap() = None;
+    }
+
+    pub fn set_mode(&self, mode: Mode) {
+        *self.mode.lock().unwrap() = mode;
     }
 
     /// Checks a DeepL key without spending characters.
@@ -129,18 +165,58 @@ impl Translator {
         deepl::usage(&self.client, deepl).await
     }
 
-    /// Google's free endpoint, or the user's DeepL key: always if they chose
-    /// that, otherwise while Google is rate-limiting (no request goes to Google
-    /// during its cooldown).
+    /// This month's DeepL usage for the configured key, looked up at most every
+    /// few seconds. None without a key or when DeepL can't be reached.
+    pub async fn deepl_quota(&self) -> Option<deepl::Usage> {
+        let deepl = self.deepl.lock().unwrap().clone()?;
+        if let Some((at, usage)) = self.usage.lock().unwrap().clone() {
+            if at.elapsed() < USAGE_FRESH {
+                return Some(usage);
+            }
+        }
+        let usage = deepl::usage(&self.client, &deepl).await.ok()?;
+        *self.usage.lock().unwrap() = Some((Instant::now(), usage.clone()));
+        Some(usage)
+    }
+
+    /// How long Google's cooldown has left, if it's rate-limiting us.
+    pub fn google_cooldown(&self) -> Option<Duration> {
+        let until = self.cooldown.lock().unwrap().until?;
+        until.checked_duration_since(Instant::now())
+    }
+
+    /// Google's free endpoint, the user's DeepL key, or Google with DeepL while
+    /// Google is rate-limiting (no request goes to Google during its cooldown).
     pub async fn translate(&self, req: Request<'_>) -> Result<Translation, Error> {
         let deepl = self.deepl.lock().unwrap().clone();
-        match &deepl {
-            Some(d) if d.always => self.pipeline(req, Provider::Deepl(d)).await,
-            Some(d) => match self.pipeline(req, Provider::Google).await {
+        let mode = *self.mode.lock().unwrap();
+        match (mode, &deepl) {
+            (Mode::Deepl, Some(d)) => self.pipeline(req, Provider::Deepl(d)).await,
+            (Mode::Deepl, None) => Err("No DeepL key yet: add one with :deepl KEY".to_owned().into()),
+            (Mode::Auto, Some(d)) => match self.pipeline(req, Provider::Google).await {
                 Err(e) if e.retry_in_ms.is_some() => self.pipeline(req, Provider::Deepl(d)).await,
                 result => result,
             },
-            None => self.pipeline(req, Provider::Google).await,
+            _ => self.pipeline(req, Provider::Google).await,
+        }
+    }
+
+    /// Spoken `text` as MP3, from Google's text-to-speech. Respects the same
+    /// cooldown as translations.
+    pub async fn speech(&self, text: &str, lang: &str) -> Result<Vec<u8>, Error> {
+        self.check_cooldown()?;
+        let text: String = text.chars().take(200).collect();
+        let resp = self
+            .client
+            .get(TTS)
+            .query(&[("client", "gtx"), ("ie", "UTF-8"), ("tl", lang), ("q", text.as_str())])
+            .send()
+            .await
+            .map_err(network_error)?;
+        match resp.status().as_u16() {
+            429 => Err(self.rate_limited(None)),
+            200 => Ok(resp.bytes().await.map_err(|e| e.to_string())?.to_vec()),
+            status => Err(format!("No speech for this language (HTTP {status})").into()),
         }
     }
 
@@ -459,10 +535,18 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "hits the network"]
+    async fn live_speech() {
+        let mp3 = Translator::new().speech("guten Morgen", "de").await.unwrap();
+        // MP3 data starts with an ID3 tag or an MPEG frame sync.
+        assert!(mp3.starts_with(b"ID3") || mp3.first() == Some(&0xFF), "{} bytes", mp3.len());
+    }
+
+    #[tokio::test]
+    #[ignore = "hits the network"]
     async fn live_falls_back_to_deepl_while_google_cools_down() {
         let t = Translator::new();
         t.rate_limited(None); // Google is cooling down: no request may go there
-        t.set_deepl(Some(Deepl { key: "00000000-0000-0000-0000-000000000000:fx".into(), always: false }));
+        t.set_deepl(Some(Deepl { key: "00000000-0000-0000-0000-000000000000:fx".into() }));
         let err = t.translate(request("house", "es", &[])).await.unwrap_err();
         assert!(err.message.contains("DeepL rejected the key"), "{err:?}");
     }

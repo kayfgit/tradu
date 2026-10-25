@@ -5,7 +5,7 @@ const el = {
   history: $('history'),
   prompt: $('prompt'), input: $('input'),
   mark: $('mark'), output: $('output'), meta: $('meta'),
-  pair: $('pair'), info: $('info'), hints: $('hints'),
+  pair: $('pair'), info: $('info'), hints: $('hints'), limits: $('limits'),
   picker: $('picker'), query: $('query'), matches: $('matches'),
 };
 
@@ -22,6 +22,9 @@ function tauriApi() {
     hide: () => invoke('hide'),
     config: () => invoke('ui_config'),
     setDeepl: key => invoke('set_deepl', { key }),
+    setProvider: provider => invoke('set_provider', { provider }),
+    limits: () => invoke('limits'),
+    speak: (text, lang) => invoke('speak', { text, lang }),
     on: (event, fn) => window.__TAURI__.event.listen(event, fn),
   };
 }
@@ -57,13 +60,15 @@ function browserApi() {
     hide: async () => {},
     config: async () => ({ start_in: 'input', debounce_ms: 400, hotkey: '', hotkey_error: null, deepl: false }),
     setDeepl: async () => { throw 'DeepL needs the app, not the browser preview'; },
+    setProvider: async () => { throw 'switching needs the app, not the browser preview'; },
+    speak: async () => { throw { message: 'the preview has no Google voice' }; },
     on: () => {},
   };
 }
 
 // ---------------------------------------------------------------- state
 
-let config = { start_in: 'input', debounce_ms: 400, hotkey: '', hotkey_error: null, deepl: false };
+let config = { start_in: 'input', debounce_ms: 400, hotkey: '', hotkey_error: null, deepl: false, provider: 'auto' };
 
 const HISTORY_MAX = 50;
 
@@ -190,7 +195,6 @@ function scheduleTranslation() {
 }
 
 let retryTimer = 0;
-let countdown = 0;
 
 /**
  * Shows a failed translation. While rate-limited it counts down and retries
@@ -201,23 +205,15 @@ function showError(err, key) {
   stopRetrying();
   const retryIn = err?.retry_in_ms;
   if (!retryIn) return setStatus(err?.message ?? String(err), 'error');
-  const retryAt = Date.now() + retryIn;
-  const tick = () => {
-    const s = Math.max(1, Math.ceil((retryAt - Date.now()) / 1000));
-    setStatus(`google rate limit, retrying in ${s < 120 ? `${s}s` : `${Math.ceil(s / 60)} min`}`, 'error');
-  };
-  tick();
-  countdown = setInterval(tick, 1000);
+  setStatus('google is limiting requests', 'error');
+  refreshLimits(); // the top-right counts the cooldown down
   retryTimer = setTimeout(() => {
-    stopRetrying();
-    setStatus('');
     if (keyOf() === key) translateNow().catch(() => {});
   }, retryIn + 50);
 }
 
 function stopRetrying() {
   clearTimeout(retryTimer);
-  clearInterval(countdown);
 }
 
 /** `stale`: the result is for an earlier version of the input. */
@@ -232,16 +228,10 @@ function show(result, { stale = false } = {}) {
   fit(el.output);
   if (result) {
     stopRetrying();
-    if (statusKind === 'error' && !config.hotkey_error) setStatus('');
+    if (statusKind === 'error') setStatus('');
+    if (result.provider === 'deepl' || limits.google_retry_ms) refreshLimits();
   }
   setHints();
-}
-
-/** Alternatives for a single word, minus the translation itself. */
-function alternatives(result) {
-  const main = (result?.text ?? '').trim().toLowerCase();
-  const terms = (result?.dict ?? []).flatMap(d => d.terms);
-  return [...new Set(terms)].filter(t => t.toLowerCase() !== main);
 }
 
 /** "noun · Unterlage": the word's part of speech and dictionary form. */
@@ -283,17 +273,46 @@ function renderMeta(result) {
     row.append(key);
   }
 
-  // Romanizing text that was converted from romaji just echoes it back, oddly
-  // ("Korehana ndesu ka"), so only show the input's reading for typed scripts.
+  // Every part leads with a label, so it's clear what it is:
+  //   reads ie    noun  家屋 · 住居 · 住まい
   const parts = [];
-  const inputReading = correction?.kind === 'script' && !asTyped ? null : result.src_translit;
-  if (inputReading) parts.push(span(inputReading));
-  if (result.translit) parts.push(Object.assign(document.createElement('i'), { textContent: result.translit }));
-  dictTerms = alternatives(result).slice(0, 9);
-  if (dictTerms.length) parts.push(span(dictTerms.slice(0, 6).join(' · ')));
-  const info = grammar(result, requestText());
-  if (info) parts.push(span(info, 'grammar'));
+  const reading = readingOf(result);
+  if (reading) parts.push(labeled('reads', span(reading, 'value-quiet')));
+  const entry = result.dict?.[0];
+  dictTerms = alternatives(result).slice(0, 4);
+  if (entry && dictTerms.length) {
+    const input = requestText();
+    const base = entry.base && entry.base.toLowerCase() !== input.toLowerCase() ? `, from ${entry.base}` : '';
+    parts.push(labeled(`${entry.pos || 'also'}${base}`, span(dictTerms.join(' · '), 'value-quiet', htmlLang(store.to))));
+  }
   if (parts.length) line(...parts);
+
+  function labeled(label, value) {
+    const group = document.createElement('span');
+    group.append(span(label, 'label'), value);
+    return group;
+  }
+}
+
+/**
+ * How the text sounds, in Latin letters: the translation's reading, or the
+ * input's when that's the one in another script. Skipped when it just repeats
+ * the text ("test" for test), and for input converted from romaji, which would
+ * echo it back oddly ("Korehana ndesu ka").
+ */
+function readingOf(result) {
+  const same = (a, b) => (a ?? '').trim().toLowerCase() === (b ?? '').trim().toLowerCase();
+  if (result.translit && !same(result.translit, result.text)) return result.translit;
+  const converted = result.correction?.kind === 'script' && !asTyped;
+  if (result.src_translit && !converted && !same(result.src_translit, requestText())) return result.src_translit;
+  return null;
+}
+
+/** First dictionary entry's alternatives, minus the translation itself. */
+function alternatives(result) {
+  const main = (result?.text ?? '').trim().toLowerCase();
+  const terms = result?.dict?.[0]?.terms ?? [];
+  return [...new Set(terms)].filter(t => t.toLowerCase() !== main);
 }
 
 // ---------------------------------------------------------------- history
@@ -403,6 +422,7 @@ const HELP = [
   [':de en', 'German into English (auto for detect)'],
   [':swap :clear', 'swap languages, clear history'],
   [':deepl KEY', 'use your DeepL key while Google is limiting'],
+  [':use auto', 'or :use google, :use deepl: who translates'],
 ];
 
 function showHelp() {
@@ -454,12 +474,39 @@ function parseCommand(line) {
   }
   if (words.length === 1 && ['help', 'h', '?'].includes(first)) return { label: 'list keys and commands', run: showHelp };
   if (first === 'deepl') return deeplCommand(line.trim().split(/\s+/).slice(1));
+  if (first === 'use') return useCommand(words[1]);
   if (words.length > 2) return { error: 'give one language (target) or two (source and target)' };
   const langs = words.map((w, i) => resolveLang(w, words.length === 2 && i === 0 ? 'from' : 'to'));
   const unknown = words.find((_, i) => !langs[i]);
   if (unknown) return { error: `no language matches "${unknown}"` };
   if (langs.length === 1) return { label: `translate into ${nameOf(langs[0])}`, run: () => setLang('to', langs[0]) };
   return { label: `${nameOf(langs[0])} → ${nameOf(langs[1])}`, run: () => setPair(langs[0], langs[1]) };
+}
+
+const PROVIDERS = {
+  auto: 'Google, and DeepL while Google is limiting',
+  google: 'always Google',
+  deepl: 'always DeepL',
+};
+
+/** `:use auto|google|deepl` picks who translates. */
+function useCommand(provider) {
+  if (!PROVIDERS[provider]) return { label: `auto, google or deepl (now ${config.provider})` };
+  if (provider === 'deepl' && !config.deepl) return { error: 'add a DeepL key first: :deepl KEY' };
+  return { label: `translate with ${PROVIDERS[provider]}`, run: () => setProvider(provider) };
+}
+
+async function setProvider(provider) {
+  try {
+    await api.setProvider(provider);
+    config.provider = provider;
+    cache.clear(); // re-translate what's on screen with the new choice
+    setStatus(`translating with ${PROVIDERS[provider]}`, 'done');
+    translateNow().catch(() => {});
+    refreshLimits();
+  } catch (err) {
+    setStatus(String(err?.message ?? err), 'error');
+  }
 }
 
 /** `:deepl KEY` saves a DeepL API key (checked first); `:deepl off` removes it. */
@@ -483,7 +530,7 @@ async function saveDeepl(key) {
       ? `, ${usage.used.toLocaleString('en')} of ${usage.limit.toLocaleString('en')} characters used this month`
       : '';
     setStatus(key ? `deepl key works and is saved${quota}` : 'deepl removed', 'done');
-    setTimeout(() => statusKind === 'done' && setStatus(''), 5000);
+    refreshLimits();
   } catch (err) {
     setStatus(String(err?.message ?? err), 'error');
   }
@@ -716,7 +763,7 @@ async function commit(mode, text) {
   archive(mode === 'paste' ? 'pasted' : 'copied');
   try {
     if (mode === 'keep') return await api.copy(text);
-    audio.pause();
+    stopSpeaking();
     if (mode === 'paste') await api.paste(text);
     else {
       await api.copy(text);
@@ -728,7 +775,7 @@ async function commit(mode, text) {
 }
 
 function hide() {
-  audio.pause();
+  stopSpeaking();
   stopRetrying();
   closePicker();
   if (commandMode) exitCommand();
@@ -738,11 +785,38 @@ function hide() {
 
 const audio = new Audio();
 
-function speak(text, lang) {
+/** Google's voice, fetched by the app; a Windows voice when Google can't speak. */
+async function speak(text, lang) {
   if (!text?.trim() || !lang || lang === 'auto') return;
-  const params = new URLSearchParams({ client: 'gtx', ie: 'UTF-8', tl: lang, q: text.slice(0, 200) });
-  audio.src = `https://translate.googleapis.com/translate_tts?${params}`;
-  audio.play().catch(() => setStatus("couldn't play audio", 'error'));
+  stopSpeaking();
+  try {
+    const mp3 = await api.speak(text, lang);
+    audio.src = URL.createObjectURL(new Blob([mp3], { type: 'audio/mpeg' }));
+    await audio.play();
+  } catch (err) {
+    if (speakLocally(text, lang)) return;
+    setStatus(`no audio: ${err?.message ?? err}`, 'error');
+  }
+}
+
+/** Speaks with a voice installed in Windows, if one matches the language. */
+function speakLocally(text, lang) {
+  const want = htmlLang(lang).toLowerCase();
+  const voices = speechSynthesis.getVoices();
+  const voice = voices.find(v => v.lang.toLowerCase() === want)
+    ?? voices.find(v => v.lang.toLowerCase().split('-')[0] === want.split('-')[0]);
+  if (!voice) return false;
+  const utterance = new SpeechSynthesisUtterance(text);
+  utterance.voice = voice;
+  utterance.lang = voice.lang;
+  speechSynthesis.speak(utterance);
+  return true;
+}
+
+function stopSpeaking() {
+  audio.pause();
+  if (audio.src.startsWith('blob:')) URL.revokeObjectURL(audio.src);
+  speechSynthesis.cancel();
 }
 
 function selectedOutput() {
@@ -849,7 +923,7 @@ window.addEventListener('blur', () => {
 
 const HINTS = {
   input: [['↑', 'recall'], ['⏎', 'copy'], ['^⏎', 'paste'], ['^S', 'swap'], [':', 'command']],
-  dict: [['⏎', 'copy'], ['alt 1-9', 'alternative'], ['^⏎', 'paste'], ['^S', 'swap'], [':', 'command']],
+  dict: [['⏎', 'copy'], ['alt 1-N', 'alternative'], ['^⏎', 'paste'], ['^S', 'swap'], [':', 'command']],
   output: [['⇧ ←→', 'select'], ['⏎', 'copy'], ['^⏎', 'paste'], ['tab', 'back']],
   picker: [['↑↓', 'move'], ['⏎', 'pick'], ['1-9', 'quick pick'], ['esc', 'keep'], ['⇧tab', 'back']],
   command: [['⏎', 'run'], ['esc', 'cancel']],
@@ -862,34 +936,73 @@ function setHints() {
     : dictTerms.length ? 'dict' : 'input';
   el.hints.replaceChildren(...HINTS[which].map(([key, label]) => {
     const span = document.createElement('span');
-    span.append(Object.assign(document.createElement('b'), { textContent: key }), label);
+    span.append(Object.assign(document.createElement('b'), { textContent: key.replace('N', dictTerms.length) }), label);
     return span;
   }));
 }
 
+// Messages show for a few seconds, then the status bar goes back to its usual line.
+const MESSAGE_MS = 4000;
 let statusText = '';
 let statusKind = '';
+let statusTimer = 0;
 
-/** A message for the status bar; empty brings back the history count. */
 function setStatus(text, kind = '') {
   statusText = text;
   statusKind = kind;
+  clearTimeout(statusTimer);
+  if (text) statusTimer = setTimeout(() => setStatus(''), MESSAGE_MS);
   renderInfo();
 }
 
 function renderInfo() {
   let text = statusText;
-  let kind = statusKind;
-  if (!text && config.hotkey_error) [text, kind] = [config.hotkey_error, 'error'];
   if (!text) {
     const parts = [`history ${store.history.length}`];
     if (store.from === 'auto') parts.push('auto-detect');
-    if (current?.provider === 'deepl') parts.push('via deepl');
+    if (config.provider === 'google' || config.provider === 'deepl') parts.push(`${config.provider} only`);
+    else if (current?.provider === 'deepl') parts.push('via deepl');
     text = parts.join('   ');
   }
   el.info.textContent = text;
   el.info.title = text;
-  el.info.className = kind;
+  el.info.className = statusText ? statusKind : '';
+}
+
+// ---------------------------------------------------------------- limits
+
+let limits = { google_retry_ms: null, deepl: null, at: 0 };
+let limitsTicker = 0;
+
+/** Asks the app for Google's cooldown and DeepL's quota (it caches the latter). */
+async function refreshLimits() {
+  if (!api.limits) return;
+  limits = { ...(await api.limits().catch(() => ({}))), at: Date.now() };
+  renderLimits();
+}
+
+const compact = n => (n >= 1e6 ? `${+(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${+(n / 1e3).toFixed(1)}k` : `${n}`);
+
+/** Top right: Google's cooldown while it's limiting, and DeepL's quota when DeepL is in play. */
+function renderLimits() {
+  clearTimeout(limitsTicker);
+  const parts = [];
+  const left = limits.google_retry_ms ? limits.google_retry_ms - (Date.now() - limits.at) : 0;
+  if (left > 0 && config.provider !== 'deepl') {
+    const s = Math.ceil(left / 1000);
+    parts.push(['google limited', s < 120 ? `${s}s` : `${Math.ceil(s / 60)}m`, 'error']);
+    limitsTicker = setTimeout(renderLimits, 1000);
+  }
+  const usage = limits.deepl;
+  if (usage?.limit && config.provider !== 'google') {
+    parts.push(['deepl', `${compact(usage.used)} / ${compact(usage.limit)}`, usage.used >= usage.limit ? 'error' : '']);
+  }
+  el.limits.replaceChildren(...parts.map(([label, value, kind]) => {
+    const span = document.createElement('span');
+    if (kind) span.className = kind;
+    span.append(label, ' ', Object.assign(document.createElement('b'), { textContent: value }));
+    return span;
+  }));
 }
 
 function focusInput() {
@@ -914,6 +1027,8 @@ function onSummon(selection) {
   closePicker();
   if (commandMode) exitCommand();
   renderHistory();
+  refreshLimits();
+  if (config.hotkey_error) setStatus(config.hotkey_error, 'error');
   if (selection) return useSelection(selection);
   if (config.start_in === 'source') return openPicker('from', true);
   focusInput();

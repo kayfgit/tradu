@@ -48,7 +48,7 @@ The global hotkey is **Ctrl+Shift+Space**. You can change it in the config.
 | **Ctrl+S** | Swap languages (the translation becomes the input) |
 | **Ctrl+L** | Pick source language, then target language |
 | **Ctrl+F** / **Ctrl+T** | Pick only the source (*from*) or only the target (*to*) |
-| **Ctrl+P** / **Ctrl+Shift+P** | Listen to the translation / the input |
+| **Ctrl+P** / **Ctrl+Shift+P** | Listen to the translation / the input (Google's voice, or a Windows voice when Google can't speak) |
 | **Ctrl+Shift+C** | Copy translation and start the next one |
 | **↑** / **↓** | Step through earlier translations |
 | **:** | On an empty line: type a command (see below) |
@@ -73,6 +73,8 @@ Type **:** on an empty line, then press **Enter** to run the command. A preview 
 | `:swap` | Swap the languages |
 | `:clear` | Clear the history |
 | `:deepl KEY` | Use your DeepL API key while Google is limiting (`:deepl off` removes it) |
+| `:use auto` | Google, and DeepL while Google is limiting (the default) |
+| `:use google` / `:use deepl` | Always that one |
 | `:help` | List the keys and commands |
 
 Languages match fuzzily, like in the picker: `:german english` and `:deu eng` work too.
@@ -114,7 +116,7 @@ Google's free endpoint limits how often one connection can ask. tradu keeps its 
 - While you type, it translates when you pause (400 ms), plus at most one in-between update every 1.5 s at the end of a word.
 - Re-typing the same text, or adding spaces, uses the cached result.
 
-If Google does refuse, tradu stops asking for a while (30 s at first, doubling up to 30 minutes) instead of retrying on every keystroke, which would keep the block going. The status bar shows a countdown, and the translation retries by itself when it ends, but only while the popup is open: nothing is retried in the background. A block can last hours; it lifts on its own as long as nothing keeps poking it.
+If Google does refuse, tradu stops asking for a while (30 s at first, doubling up to 30 minutes) instead of retrying on every keystroke, which would keep the block going. The top right shows the time left (`google limited 12m`), and the translation retries by itself when it ends, but only while the popup is open: nothing is retried in the background. A block can last hours; it lifts on its own as long as nothing keeps poking it. With a DeepL key, the top right also shows this month's DeepL usage (`deepl 12.3k / 500k`).
 
 ### DeepL fallback (optional)
 
@@ -124,7 +126,7 @@ If Google's limit keeps getting in your way, give tradu a free DeepL API key. tr
 2. In your DeepL account, open **API Keys** and copy the key (free keys end in `:fx`).
 3. In tradu, type `:deepl <key>` on an empty line and press Enter. tradu checks the key, without spending characters, and shows how much of this month's quota you've used.
 
-`:deepl off` removes the key. To use DeepL for everything, set `"translator": "deepl"` in the config.
+`:deepl off` removes the key. `:use deepl` sends everything to DeepL, `:use google` never uses it, and `:use auto` goes back to the default. Going through DeepL takes a moment longer than Google: DeepL itself answers more slowly, and in `auto` mode each Google cooldown that ends costs one more try with Google first.
 
 DeepL covers about 35 languages, including English, German, Spanish, French, Portuguese, Japanese, Korean and Chinese. For a language it doesn't cover, tradu says so. Through DeepL, romaji is still written in Japanese first, but there are no typo corrections, romanizations or dictionary alternatives.
 
@@ -148,7 +150,7 @@ Open it from the tray with **Edit config**, then use **Reload config** to apply 
   "start_in": "input",
   "hide_on_blur": true,
   "debounce_ms": 400,
-  "translator": "google",
+  "provider": "auto",
   "deepl_key": ""
 }
 ```
@@ -156,7 +158,7 @@ Open it from the tray with **Edit config**, then use **Reload config** to apply 
 - `start_in`: `"input"` (default) opens straight into the text box with your last languages. `"source"` opens in the source picker, then the target picker, then the input.
 - `hotkey`: modifiers `Ctrl`, `Shift`, `Alt` and `Super`, plus a key such as `Space`, `T`, `F9` or `Backquote`.
 - `debounce_ms`: how long a pause in typing triggers a translation. Lower feels snappier but sends more requests, so you hit Google's rate limit sooner.
-- `translator`: `"google"` (default) uses Google's free endpoint, and DeepL while Google is limiting if a key is set. `"deepl"` always uses DeepL.
+- `provider`: `"auto"` (default) uses Google's free endpoint, and DeepL while Google is limiting if a key is set. `"google"` or `"deepl"` uses only that one. Set it with `:use`.
 - `deepl_key`: your DeepL API key, normally set with `:deepl` (see [DeepL fallback](#deepl-fallback-optional)).
 
 The tray menu also has **Start at login**.

@@ -10,8 +10,6 @@ use crate::translate::{network_error, Error, Translation};
 #[derive(Debug, Clone)]
 pub struct Deepl {
     pub key: String,
-    /// Use DeepL for everything, not only while Google is refusing.
-    pub always: bool,
 }
 
 impl Deepl {
@@ -89,7 +87,7 @@ pub async fn translate(
     Ok(translation)
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Usage {
     pub used: u64,
     pub limit: u64,
@@ -180,14 +178,14 @@ mod tests {
 
     #[test]
     fn picks_the_free_host_for_free_keys() {
-        assert_eq!(Deepl { key: "abc:fx".into(), always: false }.endpoint(), "https://api-free.deepl.com");
-        assert_eq!(Deepl { key: "abc".into(), always: false }.endpoint(), "https://api.deepl.com");
+        assert_eq!(Deepl { key: "abc:fx".into() }.endpoint(), "https://api-free.deepl.com");
+        assert_eq!(Deepl { key: "abc".into() }.endpoint(), "https://api.deepl.com");
     }
 
     #[tokio::test]
     #[ignore = "hits the network"]
     async fn live_rejects_a_bad_key() {
-        let deepl = Deepl { key: "00000000-0000-0000-0000-000000000000:fx".into(), always: true };
+        let deepl = Deepl { key: "00000000-0000-0000-0000-000000000000:fx".into() };
         let err = usage(&reqwest::Client::new(), &deepl).await.unwrap_err();
         assert!(err.message.contains("rejected the key"), "{err:?}");
     }

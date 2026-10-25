@@ -41,6 +41,15 @@ struct UiConfig {
     debounce_ms: u64,
     /// Whether a DeepL key is set up.
     deepl: bool,
+    /// "auto", "google" or "deepl".
+    provider: String,
+}
+
+#[derive(Serialize)]
+struct Limits {
+    /// Set while Google is rate-limiting: how long its cooldown has left.
+    google_retry_ms: Option<u64>,
+    deepl: Option<deepl::Usage>,
 }
 
 #[tauri::command]
@@ -72,7 +81,38 @@ fn ui_config(state: State<'_, AppState>) -> UiConfig {
         start_in: config.start_in.clone(),
         debounce_ms: config.debounce_ms,
         deepl: !config.deepl_key.is_empty(),
+        provider: config.provider.clone(),
     }
+}
+
+/// What the top-right indicator shows: Google's cooldown and DeepL's quota.
+#[tauri::command]
+async fn limits(state: State<'_, AppState>) -> Result<Limits, ()> {
+    Ok(Limits {
+        google_retry_ms: state.translator.google_cooldown().map(|d| d.as_millis() as u64),
+        deepl: state.translator.deepl_quota().await,
+    })
+}
+
+/// Switches between "auto", "google" and "deepl", and saves the choice.
+#[tauri::command]
+fn set_provider(app: AppHandle, state: State<'_, AppState>, provider: String) -> Result<(), String> {
+    let mut config = state.config.lock().unwrap().clone();
+    config.provider = provider;
+    config::save(&app, &config).map_err(|e| format!("Couldn't save the config: {e}"))?;
+    state.translator.set_mode(config.mode());
+    *state.config.lock().unwrap() = config;
+    Ok(())
+}
+
+/// The text spoken in `lang`, as MP3 bytes.
+#[tauri::command]
+async fn speak(
+    state: State<'_, AppState>,
+    text: String,
+    lang: String,
+) -> Result<tauri::ipc::Response, translate::Error> {
+    Ok(tauri::ipc::Response::new(state.translator.speech(&text, &lang).await?))
 }
 
 /// Saves a DeepL key after checking it works, returning this month's usage;
@@ -235,6 +275,7 @@ fn reload_config(app: &AppHandle) {
     let state = app.state::<AppState>();
     let config = config::load(app);
     state.translator.set_deepl(config.deepl());
+    state.translator.set_mode(config.mode());
     *state.config.lock().unwrap() = config;
     register_hotkey(app);
     let _ = app.emit("config-changed", ());
@@ -316,6 +357,7 @@ fn main() {
             let config = config::load(handle);
             let translator = translate::Translator::new();
             translator.set_deepl(config.deepl());
+            translator.set_mode(config.mode());
             app.manage(AppState {
                 translator,
                 config: Mutex::new(config),
@@ -348,7 +390,7 @@ fn main() {
             }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![translate, ui_config, set_deepl, copy, hide, paste])
+        .invoke_handler(tauri::generate_handler![translate, ui_config, set_deepl, set_provider, limits, speak, copy, hide, paste])
         .run(tauri::generate_context!())
         .expect("error while running tradu");
 }
