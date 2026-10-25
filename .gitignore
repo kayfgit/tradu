@@ -1,3 +1,15 @@
+# Build output
 /src-tauri/target
 /src-tauri/gen
+
+# Local tooling and notes
 /.claude/
+/todos.md
+.vscode/
+.idea/
+*.log
+
+# OS clutter
+Thumbs.db
+desktop.ini
+.DS_Store
