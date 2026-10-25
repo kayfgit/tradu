@@ -207,7 +207,10 @@ function show(result, { stale = false } = {}) {
   document.body.classList.toggle('stale', stale);
   el.output.value = result?.text ?? '';
   el.translit.textContent = result?.translit ?? '';
-  el.srcTranslit.textContent = result?.src_translit ?? '';
+  // Romanizing text that was converted from romaji just echoes it back, oddly
+  // ("Korehana ndesu ka").
+  const typedRomanized = result?.correction?.kind === 'script' && !asTyped;
+  el.srcTranslit.textContent = typedRomanized ? '' : result?.src_translit ?? '';
   renderCorrection(result);
   renderDict(result?.dict ?? []);
   renderLangs();
