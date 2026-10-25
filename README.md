@@ -4,7 +4,9 @@ A popup translator for people who live on the keyboard. Press a hotkey from anyw
 
 If text is selected when you press the hotkey, it's already in the popup and being translated.
 
-![tradu: translate a selected message, then reply in English and paste it back in Spanish](docs/demo.gif)
+[![tradu: a friend's Portuguese sushi invite is selected and translated with the hotkey, an English reply is pasted back in Portuguese, the chef's line typed in romaji is read as Japanese, and an answer goes out in Japanese with :ja](docs/demo.gif)](docs/demo.mp4)
+
+[Watch it with sound](docs/demo.mp4)
 
 ## Install
 

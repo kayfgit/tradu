@@ -13,3 +13,6 @@
 Thumbs.db
 desktop.ini
 .DS_Store
+
+# /brag-slim working output (the final video is copied to docs/)
+/brag-output*/
