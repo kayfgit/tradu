@@ -113,7 +113,7 @@ Google's free endpoint limits how often one connection can ask. tradu keeps its 
 - While you type, it translates when you pause (400 ms), plus at most one in-between update every 1.5 s at the end of a word.
 - Re-typing the same text, or adding spaces, uses the cached result.
 
-If Google does refuse, tradu stops asking for a while (30 s at first, doubling up to 5 minutes) instead of retrying on every keystroke, which would keep the block going. The header shows a countdown, and the translation retries by itself when it ends.
+If Google does refuse, tradu stops asking for a while (30 s at first, doubling up to 30 minutes) instead of retrying on every keystroke, which would keep the block going. The status bar shows a countdown, and the translation retries by itself when it ends, but only while the popup is open: nothing is retried in the background. A block can last hours; it lifts on its own as long as nothing keeps poking it.
 
 ### How the selection is read
 

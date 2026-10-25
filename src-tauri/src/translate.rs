@@ -19,8 +19,9 @@ const ENDPOINT: &str = "https://translate.googleapis.com/translate_a/single";
 const INPUT_TOOLS: &str = "https://inputtools.google.com/request";
 
 /// The first cooldown after a 429; it doubles while Google keeps refusing.
+/// Google's blocks can last hours, and probing one may extend it.
 const COOLDOWN_MIN: Duration = Duration::from_secs(30);
-const COOLDOWN_MAX: Duration = Duration::from_secs(300);
+const COOLDOWN_MAX: Duration = Duration::from_secs(1800);
 /// Longest `Retry-After` we honor.
 const RETRY_AFTER_MAX: Duration = Duration::from_secs(1800);
 

@@ -190,23 +190,32 @@ function scheduleTranslation() {
 let retryTimer = 0;
 let countdown = 0;
 
-/** Shows a failed translation; while rate-limited, counts down and retries. */
+/**
+ * Shows a failed translation. While rate-limited it counts down and retries
+ * once the cooldown ends, but only while the popup is open: retrying in the
+ * background would keep Google's block going.
+ */
 function showError(err, key) {
-  clearTimeout(retryTimer);
-  clearInterval(countdown);
+  stopRetrying();
   const retryIn = err?.retry_in_ms;
   if (!retryIn) return setStatus(err?.message ?? String(err), 'error');
   const retryAt = Date.now() + retryIn;
   const tick = () => {
-    setStatus(`google rate limit, retrying in ${Math.max(1, Math.ceil((retryAt - Date.now()) / 1000))}s`, 'error');
+    const s = Math.max(1, Math.ceil((retryAt - Date.now()) / 1000));
+    setStatus(`google rate limit, retrying in ${s < 120 ? `${s}s` : `${Math.ceil(s / 60)} min`}`, 'error');
   };
   tick();
   countdown = setInterval(tick, 1000);
   retryTimer = setTimeout(() => {
-    clearInterval(countdown);
+    stopRetrying();
     setStatus('');
     if (keyOf() === key) translateNow().catch(() => {});
   }, retryIn + 50);
+}
+
+function stopRetrying() {
+  clearTimeout(retryTimer);
+  clearInterval(countdown);
 }
 
 /** `stale`: the result is for an earlier version of the input. */
@@ -220,8 +229,7 @@ function show(result, { stale = false } = {}) {
   renderPair();
   fit(el.output);
   if (result) {
-    clearTimeout(retryTimer);
-    clearInterval(countdown);
+    stopRetrying();
     if (statusKind === 'error' && !config.hotkey_error) setStatus('');
   }
   setHints();
@@ -690,6 +698,7 @@ async function commit(mode, text) {
 
 function hide() {
   audio.pause();
+  stopRetrying();
   closePicker();
   if (commandMode) exitCommand();
   archive(null);
@@ -798,8 +807,12 @@ document.addEventListener('contextmenu', e => {
   if (!e.target.matches('textarea, input')) e.preventDefault();
 });
 
-// Closing by clicking away (the app hides on blur) files the translation too.
-window.addEventListener('blur', () => archive(null));
+// Closing by clicking away (the app hides on blur) files the translation too,
+// and nothing is retried while the popup is out of sight.
+window.addEventListener('blur', () => {
+  stopRetrying();
+  archive(null);
+});
 
 // ---------------------------------------------------------------- chrome
 
