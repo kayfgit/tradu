@@ -34,7 +34,7 @@ To uninstall, use **Settings › Apps**, or run `& "$env:LOCALAPPDATA\tradu\unin
 The global hotkey is **Ctrl+Shift+Space**. You can change it in the config.
 
 - **Nothing selected:** the popup opens with an empty line and your last languages, ready to type.
-- **Text selected** in any app: the popup opens with that text in it and translates it straight away. Press Enter to copy the translation, or Ctrl+Enter to paste it over the selection (in an editable field).
+- **Text selected** in any app: the popup opens with that text in it and translates it straight away, with the source set to auto-detect (the selection could be in any language). Press Enter to copy the translation, or Ctrl+Enter to paste it over the selection (in an editable field).
 
 ### Typing
 
@@ -75,6 +75,8 @@ Type **:** on an empty line, then press **Enter** to run the command. A preview 
 | `:deepl KEY` | Use your DeepL API key while Google is limiting (`:deepl off` removes it) |
 | `:use auto` | Google, and DeepL while Google is limiting (the default) |
 | `:use google` / `:use deepl` | Always that one |
+| `:move` / `:resize` | Place the popup with **h j k l** (40 px; **Shift** 8 px, **Ctrl** 200 px), **Esc** or **Enter** when done. It opens there from then on. |
+| `:move reset` / `:resize reset` | Back to centered / the default size |
 | `:help` | List the keys and commands |
 
 Languages match fuzzily, like in the picker: `:german english` and `:deu eng` work too.
@@ -160,6 +162,7 @@ Open it from the tray with **Edit config**, then use **Reload config** to apply 
 - `debounce_ms`: how long a pause in typing triggers a translation. Lower feels snappier but sends more requests, so you hit Google's rate limit sooner.
 - `provider`: `"auto"` (default) uses Google's free endpoint, and DeepL while Google is limiting if a key is set. `"google"` or `"deepl"` uses only that one. Set it with `:use`.
 - `deepl_key`: your DeepL API key, normally set with `:deepl` (see [DeepL fallback](#deepl-fallback-optional)).
+- `window_position`, `window_size`: where the popup opens (from the top-left of the monitor under the mouse) and how big it is, in pixels. Set with `:move` and `:resize`; leave them out for centered and 760×480.
 
 The tray menu also has **Start at login**.
 

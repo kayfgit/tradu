@@ -27,6 +27,11 @@ pub struct Config {
     /// "deepl". Read once and migrated.
     #[serde(skip_serializing)]
     translator: Option<String>,
+    /// Where the popup opens, from the top-left of the monitor under the mouse,
+    /// in logical pixels. Unset: centered. Set with `:move`.
+    pub window_position: Option<[f64; 2]>,
+    /// The popup's size in logical pixels. Unset: the default. Set with `:resize`.
+    pub window_size: Option<[f64; 2]>,
 }
 
 impl Default for Config {
@@ -39,6 +44,8 @@ impl Default for Config {
             provider: "auto".into(),
             deepl_key: String::new(),
             translator: None,
+            window_position: None,
+            window_size: None,
         }
     }
 }

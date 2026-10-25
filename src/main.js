@@ -25,6 +25,10 @@ function tauriApi() {
     setProvider: provider => invoke('set_provider', { provider }),
     limits: () => invoke('limits'),
     speak: (text, lang) => invoke('speak', { text, lang }),
+    moveWindow: (dx, dy) => invoke('move_window', { dx, dy }),
+    resizeWindow: (dw, dh) => invoke('resize_window', { dw, dh }),
+    savePlacement: what => invoke('save_placement', { what }),
+    resetPlacement: what => invoke('reset_placement', { what }),
     on: (event, fn) => window.__TAURI__.event.listen(event, fn),
   };
 }
@@ -62,6 +66,10 @@ function browserApi() {
     setDeepl: async () => { throw 'DeepL needs the app, not the browser preview'; },
     setProvider: async () => { throw 'switching needs the app, not the browser preview'; },
     speak: async () => { throw { message: 'the preview has no Google voice' }; },
+    moveWindow: async () => {},
+    resizeWindow: async () => {},
+    savePlacement: async () => {},
+    resetPlacement: async () => {},
     on: () => {},
   };
 }
@@ -423,6 +431,7 @@ const HELP = [
   [':swap :clear', 'swap languages, clear history'],
   [':deepl KEY', 'use your DeepL key while Google is limiting'],
   [':use auto', 'or :use google, :use deepl: who translates'],
+  [':move :resize', 'place the popup with hjkl (⇧ fine, ^ big), reset to undo'],
 ];
 
 function showHelp() {
@@ -475,6 +484,7 @@ function parseCommand(line) {
   if (words.length === 1 && ['help', 'h', '?'].includes(first)) return { label: 'list keys and commands', run: showHelp };
   if (first === 'deepl') return deeplCommand(line.trim().split(/\s+/).slice(1));
   if (first === 'use') return useCommand(words[1]);
+  if (first === 'move' || first === 'resize') return placementCommand(first, words[1]);
   if (words.length > 2) return { error: 'give one language (target) or two (source and target)' };
   const langs = words.map((w, i) => resolveLang(w, words.length === 2 && i === 0 ? 'from' : 'to'));
   const unknown = words.find((_, i) => !langs[i]);
@@ -482,6 +492,50 @@ function parseCommand(line) {
   if (langs.length === 1) return { label: `translate into ${nameOf(langs[0])}`, run: () => setLang('to', langs[0]) };
   return { label: `${nameOf(langs[0])} → ${nameOf(langs[1])}`, run: () => setPair(langs[0], langs[1]) };
 }
+
+/** `:move` / `:resize` place the popup with hjkl; `reset` undoes it. */
+function placementCommand(mode, arg) {
+  const what = mode === 'move' ? 'position' : 'size';
+  if (arg === 'reset') {
+    return {
+      label: mode === 'move' ? 'open centered again' : 'back to the default size',
+      run: () => api.resetPlacement(what).catch(err => setStatus(String(err?.message ?? err), 'error')),
+    };
+  }
+  return { label: `${mode} the popup with h j k l`, run: () => enterWindowMode(mode) };
+}
+
+// ---------------------------------------------------------------- window placement
+
+// Like the browser's :move/:resize: hjkl steps 40px, Shift 8px, Ctrl 200px;
+// Esc or Enter is done. Keys are matched by position, so Shift/Ctrl don't change them.
+const WINDOW_STEP = { normal: 40, fine: 8, big: 200 };
+let windowMode = null; // 'move' | 'resize'
+
+function enterWindowMode(mode) {
+  windowMode = mode;
+  renderPair();
+  setHints();
+}
+
+function exitWindowMode() {
+  const mode = windowMode;
+  windowMode = null;
+  renderPair();
+  setHints();
+  api.savePlacement(mode === 'move' ? 'position' : 'size')
+    .catch(err => setStatus(String(err?.message ?? err), 'error'));
+}
+
+document.addEventListener('keydown', e => {
+  if (!windowMode) return;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  const step = e.ctrlKey ? WINDOW_STEP.big : e.shiftKey ? WINDOW_STEP.fine : WINDOW_STEP.normal;
+  const delta = { KeyH: [-step, 0], KeyL: [step, 0], KeyJ: [0, step], KeyK: [0, -step] }[e.code];
+  if (delta) (windowMode === 'move' ? api.moveWindow : api.resizeWindow)(...delta);
+  else if (e.key === 'Escape' || e.key === 'Enter') exitWindowMode();
+}, true);
 
 const PROVIDERS = {
   auto: 'Google, and DeepL while Google is limiting',
@@ -560,7 +614,7 @@ function runCommand() {
 function renderPair() {
   const detected = store.from === 'auto' ? current?.detected : null;
   const source = canon(detected ?? store.from);
-  el.pair.textContent = `${source}→${store.to}`.toUpperCase();
+  el.pair.textContent = windowMode ? windowMode.toUpperCase() : `${source}→${store.to}`.toUpperCase();
   el.prompt.textContent = commandMode ? ':' : `${source}›`;
   el.input.lang = htmlLang(source);
   el.output.lang = htmlLang(store.to);
@@ -915,6 +969,7 @@ document.addEventListener('contextmenu', e => {
 // Closing by clicking away (the app hides on blur) files the translation too,
 // and nothing is retried while the popup is out of sight.
 window.addEventListener('blur', () => {
+  if (windowMode) exitWindowMode();
   stopRetrying();
   archive(null);
 });
@@ -927,13 +982,15 @@ const HINTS = {
   output: [['⇧ ←→', 'select'], ['⏎', 'copy'], ['^⏎', 'paste'], ['tab', 'back']],
   picker: [['↑↓', 'move'], ['⏎', 'pick'], ['1-9', 'quick pick'], ['esc', 'keep'], ['⇧tab', 'back']],
   command: [['⏎', 'run'], ['esc', 'cancel']],
+  move: [['hjkl', 'move'], ['⇧', 'fine'], ['^', 'big'], ['esc', 'done']],
+  resize: [['hjkl', 'resize'], ['⇧', 'fine'], ['^', 'big'], ['esc', 'done']],
 };
 
 function setHints() {
-  const which = picking ? 'picker'
+  const which = windowMode ?? (picking ? 'picker'
     : commandMode ? 'command'
     : document.activeElement === el.output ? 'output'
-    : dictTerms.length ? 'dict' : 'input';
+    : dictTerms.length ? 'dict' : 'input');
   el.hints.replaceChildren(...HINTS[which].map(([key, label]) => {
     const span = document.createElement('span');
     span.append(Object.assign(document.createElement('b'), { textContent: key.replace('N', dictTerms.length) }), label);
@@ -1035,8 +1092,14 @@ function onSummon(selection) {
   el.input.select(); // an unfinished line stays; typing replaces it
 }
 
+/** Text selected in another app could be in any language, so the source becomes auto-detect. */
 function useSelection(text) {
   closePicker();
+  if (store.from !== 'auto') {
+    store.from = 'auto';
+    saveStore();
+    renderPair();
+  }
   el.input.value = text.trim();
   fit(el.input, 124);
   focusInput();

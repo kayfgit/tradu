@@ -14,7 +14,7 @@ use serde::Serialize;
 use tauri::{
     menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Emitter, Manager, PhysicalPosition, State, WebviewWindow, WindowEvent,
+    AppHandle, Emitter, LogicalSize, Manager, PhysicalPosition, State, WebviewWindow, WindowEvent,
 };
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
@@ -241,19 +241,97 @@ fn show(app: &AppHandle, selection: Option<String>) {
     let _ = window.emit("summon", selection);
 }
 
+/// Opens the popup on the monitor under the mouse: where `:move` left it, or
+/// centered in the upper third. Always kept fully on screen.
 fn place_on_cursor_monitor(window: &WebviewWindow) {
+    let saved = window.state::<AppState>().config.lock().unwrap().window_position;
     let placed = (|| {
         let cursor = window.cursor_position().ok()?;
         let monitor = window.monitor_from_point(cursor.x, cursor.y).ok()??;
         let size = window.outer_size().ok()?;
-        let (origin, area) = (monitor.position(), monitor.size());
-        let x = origin.x + (area.width as i32 - size.width as i32) / 2;
-        let y = origin.y + (area.height as i32 - size.height as i32) / 3;
-        window.set_position(PhysicalPosition::new(x, y)).ok()
+        let (origin, area, scale) = (monitor.position(), monitor.size(), monitor.scale_factor());
+        let (w, h) = (size.width as i32, size.height as i32);
+        let (x, y) = match saved {
+            Some([x, y]) => ((x * scale) as i32, (y * scale) as i32),
+            None => ((area.width as i32 - w) / 2, (area.height as i32 - h) / 3),
+        };
+        let x = x.clamp(0, (area.width as i32 - w).max(0));
+        let y = y.clamp(0, (area.height as i32 - h).max(0));
+        window.set_position(PhysicalPosition::new(origin.x + x, origin.y + y)).ok()
     })();
     if placed.is_none() {
         let _ = window.center();
     }
+}
+
+const DEFAULT_SIZE: [f64; 2] = [760.0, 480.0];
+const MIN_SIZE: [f64; 2] = [520.0, 320.0];
+
+/// One `:move` step, in logical pixels.
+#[tauri::command]
+fn move_window(window: WebviewWindow, dx: f64, dy: f64) {
+    let scale = window.scale_factor().unwrap_or(1.0);
+    if let Ok(pos) = window.outer_position() {
+        let (dx, dy) = ((dx * scale) as i32, (dy * scale) as i32);
+        let _ = window.set_position(PhysicalPosition::new(pos.x + dx, pos.y + dy));
+    }
+}
+
+/// One `:resize` step, in logical pixels.
+#[tauri::command]
+fn resize_window(window: WebviewWindow, dw: f64, dh: f64) {
+    let scale = window.scale_factor().unwrap_or(1.0);
+    if let Ok(size) = window.inner_size() {
+        let size = size.to_logical::<f64>(scale);
+        let width = (size.width + dw).max(MIN_SIZE[0]);
+        let height = (size.height + dh).max(MIN_SIZE[1]);
+        let _ = window.set_size(LogicalSize::new(width, height));
+    }
+}
+
+/// Remembers where `:move` ("position") or `:resize` ("size") left the popup.
+#[tauri::command]
+fn save_placement(
+    app: AppHandle,
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    what: String,
+) -> Result<(), String> {
+    let scale = window.scale_factor().map_err(|e| e.to_string())?;
+    let mut config = state.config.lock().unwrap().clone();
+    if what == "position" {
+        let monitor = window.current_monitor().ok().flatten().ok_or("The popup isn't on a monitor")?;
+        let pos = window.outer_position().map_err(|e| e.to_string())?;
+        let origin = monitor.position();
+        config.window_position = Some([(pos.x - origin.x) as f64 / scale, (pos.y - origin.y) as f64 / scale]);
+    } else {
+        let size = window.inner_size().map_err(|e| e.to_string())?.to_logical::<f64>(scale);
+        config.window_size = Some([size.width, size.height]);
+    }
+    config::save(&app, &config).map_err(|e| format!("Couldn't save the config: {e}"))?;
+    *state.config.lock().unwrap() = config;
+    Ok(())
+}
+
+/// `:move reset` / `:resize reset`: back to centered, or to the default size.
+#[tauri::command]
+fn reset_placement(
+    app: AppHandle,
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    what: String,
+) -> Result<(), String> {
+    let mut config = state.config.lock().unwrap().clone();
+    if what == "position" {
+        config.window_position = None;
+    } else {
+        config.window_size = None;
+        let _ = window.set_size(LogicalSize::new(DEFAULT_SIZE[0], DEFAULT_SIZE[1]));
+    }
+    config::save(&app, &config).map_err(|e| format!("Couldn't save the config: {e}"))?;
+    *state.config.lock().unwrap() = config;
+    place_on_cursor_monitor(&window);
+    Ok(())
 }
 
 fn register_hotkey(app: &AppHandle) {
@@ -369,6 +447,9 @@ fn main() {
             build_tray(handle)?;
 
             let window = app.get_webview_window("main").expect("main window");
+            if let Some([width, height]) = app.state::<AppState>().config.lock().unwrap().window_size {
+                let _ = window.set_size(LogicalSize::new(width, height));
+            }
             let w = window.clone();
             window.on_window_event(move |event| match event {
                 WindowEvent::Focused(false) => {
@@ -390,7 +471,21 @@ fn main() {
             }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![translate, ui_config, set_deepl, set_provider, limits, speak, copy, hide, paste])
+        .invoke_handler(tauri::generate_handler![
+            translate,
+            ui_config,
+            set_deepl,
+            set_provider,
+            limits,
+            speak,
+            move_window,
+            resize_window,
+            save_placement,
+            reset_placement,
+            copy,
+            hide,
+            paste
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tradu");
 }
