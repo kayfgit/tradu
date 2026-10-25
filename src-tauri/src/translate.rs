@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::azure::{self, Azure};
 use crate::romaji;
 
 const ENDPOINT: &str = "https://translate.googleapis.com/translate_a/single";
@@ -37,6 +38,8 @@ pub struct Translation {
     pub dict: Vec<DictEntry>,
     /// Set when what was translated isn't exactly what was typed.
     pub correction: Option<Correction>,
+    /// "google" or "azure".
+    pub provider: &'static str,
 }
 
 #[derive(Debug, Serialize)]
@@ -76,6 +79,7 @@ impl From<String> for Error {
     }
 }
 
+#[derive(Clone, Copy)]
 pub struct Request<'a> {
     pub text: &'a str,
     pub from: &'a str,
@@ -89,12 +93,19 @@ pub struct Request<'a> {
 pub struct Translator {
     client: reqwest::Client,
     cooldown: Mutex<Cooldown>,
+    azure: Mutex<Option<Azure>>,
 }
 
 #[derive(Default)]
 struct Cooldown {
     until: Option<Instant>,
     length: Duration,
+}
+
+#[derive(Clone, Copy)]
+enum Provider<'a> {
+    Google,
+    Azure(&'a Azure),
 }
 
 impl Translator {
@@ -106,20 +117,43 @@ impl Translator {
             .pool_idle_timeout(Duration::from_secs(300))
             .build()
             .expect("http client");
-        Self { client, cooldown: Mutex::default() }
+        Self { client, cooldown: Mutex::default(), azure: Mutex::default() }
     }
 
+    pub fn set_azure(&self, azure: Option<Azure>) {
+        *self.azure.lock().unwrap() = azure;
+    }
+
+    pub async fn check_azure(&self, azure: &Azure) -> Result<(), Error> {
+        azure::check(&self.client, azure).await
+    }
+
+    /// Google's free endpoint, or the user's Azure key: always if they chose
+    /// that, otherwise while Google is rate-limiting (no request goes to Google
+    /// during its cooldown).
     pub async fn translate(&self, req: Request<'_>) -> Result<Translation, Error> {
+        let azure = self.azure.lock().unwrap().clone();
+        match &azure {
+            Some(a) if a.always => self.pipeline(req, Provider::Azure(a)).await,
+            Some(a) => match self.pipeline(req, Provider::Google).await {
+                Err(e) if e.retry_in_ms.is_some() => self.pipeline(req, Provider::Azure(a)).await,
+                result => result,
+            },
+            None => self.pipeline(req, Provider::Google).await,
+        }
+    }
+
+    async fn pipeline(&self, req: Request<'_>, provider: Provider<'_>) -> Result<Translation, Error> {
         let Request { text, from, to, pair, as_typed } = req;
 
         // Romanized input with the source set explicitly, e.g. romaji with Japanese.
         if !as_typed && is_romanized(text, from) {
             if let Some(native) = self.convert_script(text, from).await {
-                return self.translate_corrected(native, from, to, CorrectionKind::Script).await;
+                return self.translate_corrected(provider, native, from, to, CorrectionKind::Script).await;
             }
         }
 
-        let first = self.gtx(text, from, to).await?;
+        let first = self.raw(provider, text, from, to).await?;
         if as_typed {
             return Ok(first);
         }
@@ -141,7 +175,7 @@ impl Translator {
         };
         if let Some(lang) = script_lang {
             if let Some(native) = self.convert_script(text, lang).await {
-                return self.translate_corrected(native, lang, to, CorrectionKind::Script).await;
+                return self.translate_corrected(provider, native, lang, to, CorrectionKind::Script).await;
             }
         }
 
@@ -149,7 +183,7 @@ impl Translator {
         if let Some(c) = &first.correction {
             if c.kind == CorrectionKind::Spelling && first.text.trim().eq_ignore_ascii_case(text.trim()) {
                 let corrected = c.text.clone();
-                return self.translate_corrected(corrected, from, to, CorrectionKind::Spelling).await;
+                return self.translate_corrected(provider, corrected, from, to, CorrectionKind::Spelling).await;
             }
         }
         Ok(first)
@@ -157,14 +191,23 @@ impl Translator {
 
     async fn translate_corrected(
         &self,
+        provider: Provider<'_>,
         text: String,
         from: &str,
         to: &str,
         kind: CorrectionKind,
     ) -> Result<Translation, Error> {
-        let mut translation = self.gtx(&text, from, to).await?;
+        let mut translation = self.raw(provider, &text, from, to).await?;
         translation.correction = Some(Correction { text, kind });
         Ok(translation)
+    }
+
+    /// One translation from one provider, without the corrections pipeline.
+    async fn raw(&self, provider: Provider<'_>, text: &str, from: &str, to: &str) -> Result<Translation, Error> {
+        match provider {
+            Provider::Google => self.gtx(text, from, to).await,
+            Provider::Azure(azure) => azure::translate(&self.client, azure, text, from, to).await,
+        }
     }
 
     async fn gtx(&self, text: &str, from: &str, to: &str) -> Result<Translation, Error> {
@@ -262,7 +305,7 @@ fn is_romanized(text: &str, lang: &str) -> bool {
 }
 
 /// reqwest's top-level message hides the cause (DNS, TLS, timeout…), so walk the chain.
-fn network_error(e: reqwest::Error) -> Error {
+pub(crate) fn network_error(e: reqwest::Error) -> Error {
     if e.is_timeout() {
         return "Network error: timed out".to_owned().into();
     }
@@ -273,13 +316,13 @@ fn network_error(e: reqwest::Error) -> Error {
     format!("Network error: {cause}").into()
 }
 
-fn non_empty(v: &Value) -> Option<String> {
+pub(crate) fn non_empty(v: &Value) -> Option<String> {
     v.as_str().filter(|s| !s.is_empty()).map(str::to_owned)
 }
 
 /// Parses a `gtx` response for the request text `input`.
 pub fn parse(json: &Value, input: &str) -> Translation {
-    let mut out = Translation::default();
+    let mut out = Translation { provider: "google", ..Default::default() };
     for s in json["sentences"].as_array().into_iter().flatten() {
         if let Some(t) = s["trans"].as_str() {
             out.text.push_str(t);
@@ -411,6 +454,16 @@ mod tests {
         assert_eq!(t.text.to_lowercase(), "casa", "{t:?}");
         assert_eq!(t.detected.as_deref(), Some("en"));
         assert!(!t.dict.is_empty());
+    }
+
+    #[tokio::test]
+    #[ignore = "hits the network"]
+    async fn live_falls_back_to_azure_while_google_cools_down() {
+        let t = Translator::new();
+        t.rate_limited(None); // Google is cooling down: no request may go there
+        t.set_azure(Some(Azure { key: "not-a-real-key".into(), region: "westeurope".into(), always: false }));
+        let err = t.translate(request("house", "es", &[])).await.unwrap_err();
+        assert!(err.message.contains("Azure rejected the key"), "{err:?}");
     }
 
     #[tokio::test]

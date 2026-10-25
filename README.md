@@ -72,6 +72,7 @@ Type **:** on an empty line, then press **Enter** to run the command. A preview 
 | `:de en` | Translate German into English (`:auto en` to detect the source) |
 | `:swap` | Swap the languages |
 | `:clear` | Clear the history |
+| `:azure KEY REGION` | Use your Azure Translator key while Google is limiting (`:azure off` removes it) |
 | `:help` | List the keys and commands |
 
 Languages match fuzzily, like in the picker: `:german english` and `:deu eng` work too.
@@ -115,6 +116,17 @@ Google's free endpoint limits how often one connection can ask. tradu keeps its 
 
 If Google does refuse, tradu stops asking for a while (30 s at first, doubling up to 30 minutes) instead of retrying on every keystroke, which would keep the block going. The status bar shows a countdown, and the translation retries by itself when it ends, but only while the popup is open: nothing is retried in the background. A block can last hours; it lifts on its own as long as nothing keeps poking it.
 
+### Azure fallback (optional)
+
+If Google's limit keeps getting in your way, give tradu a free Microsoft Azure Translator key. tradu still uses Google normally and switches to Azure only while Google is refusing, so the free quota lasts. The status bar shows `via azure` when Azure translated what's on screen.
+
+1. Sign in to the [Azure portal](https://portal.azure.com). A free account asks for a card to verify you, but the Free tier below never charges.
+2. Create a **Translator** resource with the pricing tier **Free F0** (2 million characters a month), in a region near you.
+3. In the resource, open **Keys and Endpoint** and copy **KEY 1** and the **Location/Region**.
+4. In tradu, type `:azure <key> <region>` on an empty line and press Enter. tradu checks the key and saves it.
+
+`:azure off` removes the key. To use Azure for everything, set `"translator": "azure"` in the config. With Azure, romaji is still written in Japanese first and single English words get dictionary alternatives, but typos aren't corrected.
+
 ### How the selection is read
 
 The hotkey asks the app to copy its selection with **Ctrl+Insert**, the standard Windows copy shortcut, then reads the clipboard. It doesn't use Ctrl+C, because in a terminal Ctrl+C interrupts the running program when nothing is selected.
@@ -134,13 +146,18 @@ Open it from the tray with **Edit config**, then use **Reload config** to apply 
   "hotkey": "Ctrl+Shift+Space",
   "start_in": "input",
   "hide_on_blur": true,
-  "debounce_ms": 400
+  "debounce_ms": 400,
+  "translator": "google",
+  "azure_key": "",
+  "azure_region": ""
 }
 ```
 
 - `start_in`: `"input"` (default) opens straight into the text box with your last languages. `"source"` opens in the source picker, then the target picker, then the input.
 - `hotkey`: modifiers `Ctrl`, `Shift`, `Alt` and `Super`, plus a key such as `Space`, `T`, `F9` or `Backquote`.
 - `debounce_ms`: how long a pause in typing triggers a translation. Lower feels snappier but sends more requests, so you hit Google's rate limit sooner.
+- `translator`: `"google"` (default) uses Google's free endpoint, and Azure while Google is limiting if a key is set. `"azure"` always uses Azure.
+- `azure_key`, `azure_region`: your Azure Translator key, normally set with `:azure` (see [Azure fallback](#azure-fallback-optional)).
 
 The tray menu also has **Start at login**.
 

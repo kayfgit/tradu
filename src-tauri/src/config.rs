@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager};
 
+use crate::azure::Azure;
+
 /// User-editable settings, stored as JSON in the app's config dir.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -15,6 +17,12 @@ pub struct Config {
     pub hide_on_blur: bool,
     /// Pause after the last keystroke before translating.
     pub debounce_ms: u64,
+    /// "google": the free endpoint, with Azure (if set up) while Google is
+    /// rate-limiting. "azure": always Azure.
+    pub translator: String,
+    /// Azure Translator key and region, usually set with `:azure KEY REGION`.
+    pub azure_key: String,
+    pub azure_region: String,
 }
 
 impl Default for Config {
@@ -24,7 +32,20 @@ impl Default for Config {
             start_in: "input".into(),
             hide_on_blur: true,
             debounce_ms: 400,
+            translator: "google".into(),
+            azure_key: String::new(),
+            azure_region: String::new(),
         }
+    }
+}
+
+impl Config {
+    pub fn azure(&self) -> Option<Azure> {
+        (!self.azure_key.is_empty()).then(|| Azure {
+            key: self.azure_key.clone(),
+            region: self.azure_region.clone(),
+            always: self.translator == "azure",
+        })
     }
 }
 
@@ -63,6 +84,14 @@ pub fn load(app: &AppHandle) -> Config {
             config
         }
     }
+}
+
+pub fn save(app: &AppHandle, config: &Config) -> std::io::Result<()> {
+    let path = path(app);
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    std::fs::write(&path, serde_json::to_string_pretty(config).unwrap())
 }
 
 pub fn open_in_editor(app: &AppHandle) {

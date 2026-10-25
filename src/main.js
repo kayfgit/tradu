@@ -21,6 +21,7 @@ function tauriApi() {
     paste: text => invoke('paste', { text }),
     hide: () => invoke('hide'),
     config: () => invoke('ui_config'),
+    setAzure: (key, region) => invoke('set_azure', { key, region }),
     on: (event, fn) => window.__TAURI__.event.listen(event, fn),
   };
 }
@@ -54,14 +55,15 @@ function browserApi() {
     copy: text => navigator.clipboard.writeText(text),
     paste: text => navigator.clipboard.writeText(text),
     hide: async () => {},
-    config: async () => ({ start_in: 'input', debounce_ms: 400, hotkey: '', hotkey_error: null }),
+    config: async () => ({ start_in: 'input', debounce_ms: 400, hotkey: '', hotkey_error: null, azure: false }),
+    setAzure: async () => { throw 'Azure needs the app, not the browser preview'; },
     on: () => {},
   };
 }
 
 // ---------------------------------------------------------------- state
 
-let config = { start_in: 'input', debounce_ms: 400, hotkey: '', hotkey_error: null };
+let config = { start_in: 'input', debounce_ms: 400, hotkey: '', hotkey_error: null, azure: false };
 
 const HISTORY_MAX = 50;
 
@@ -400,6 +402,7 @@ const HELP = [
   [':ja', 'translate into Japanese'],
   [':de en', 'German into English (auto for detect)'],
   [':swap :clear', 'swap languages, clear history'],
+  [':azure KEY REGION', 'use your Azure key while Google is limiting'],
 ];
 
 function showHelp() {
@@ -450,12 +453,38 @@ function parseCommand(line) {
     return { label: `clear history (${store.history.length})`, run: clearHistory };
   }
   if (words.length === 1 && ['help', 'h', '?'].includes(first)) return { label: 'list keys and commands', run: showHelp };
+  if (first === 'azure') return azureCommand(line.trim().split(/\s+/).slice(1));
   if (words.length > 2) return { error: 'give one language (target) or two (source and target)' };
   const langs = words.map((w, i) => resolveLang(w, words.length === 2 && i === 0 ? 'from' : 'to'));
   const unknown = words.find((_, i) => !langs[i]);
   if (unknown) return { error: `no language matches "${unknown}"` };
   if (langs.length === 1) return { label: `translate into ${nameOf(langs[0])}`, run: () => setLang('to', langs[0]) };
   return { label: `${nameOf(langs[0])} → ${nameOf(langs[1])}`, run: () => setPair(langs[0], langs[1]) };
+}
+
+/** `:azure KEY [REGION]` saves an Azure Translator key (checked first); `:azure off` removes it. */
+function azureCommand([key, region = '']) {
+  if (!key) {
+    return { label: config.azure ? 'Azure is set up. :azure off removes it' : 'paste your Azure Translator key, then its region' };
+  }
+  if (key.toLowerCase() === 'off') return { label: 'stop using Azure', run: () => saveAzure('', '') };
+  const masked = `${'•'.repeat(4)}${key.slice(-4)}`;
+  return {
+    label: `use Azure key ${masked}${region ? ` in ${region}` : ' (add the region if it isn\'t global)'} while Google is limiting`,
+    run: () => saveAzure(key, region),
+  };
+}
+
+async function saveAzure(key, region) {
+  setStatus(key ? 'checking the Azure key…' : '');
+  try {
+    await api.setAzure(key, region);
+    config.azure = !!key;
+    setStatus(key ? 'azure key works and is saved' : 'azure removed', 'done');
+    setTimeout(() => statusKind === 'done' && setStatus(''), 3000);
+  } catch (err) {
+    setStatus(String(err?.message ?? err), 'error');
+  }
 }
 
 function previewCommand() {
@@ -853,6 +882,7 @@ function renderInfo() {
   if (!text) {
     const parts = [`history ${store.history.length}`];
     if (store.from === 'auto') parts.push('auto-detect');
+    if (current?.provider === 'azure') parts.push('via azure');
     text = parts.join('   ');
   }
   el.info.textContent = text;

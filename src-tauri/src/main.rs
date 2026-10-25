@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod azure;
 mod config;
 mod origin;
 mod romaji;
@@ -38,6 +39,8 @@ struct UiConfig {
     hotkey_error: Option<String>,
     start_in: String,
     debounce_ms: u64,
+    /// Whether an Azure key is set up.
+    azure: bool,
 }
 
 #[tauri::command]
@@ -68,7 +71,28 @@ fn ui_config(state: State<'_, AppState>) -> UiConfig {
         hotkey_error: state.hotkey_error.lock().unwrap().clone(),
         start_in: config.start_in.clone(),
         debounce_ms: config.debounce_ms,
+        azure: !config.azure_key.is_empty(),
     }
+}
+
+/// Saves an Azure key after checking it works; an empty key removes it.
+#[tauri::command]
+async fn set_azure(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    key: String,
+    region: String,
+) -> Result<(), String> {
+    let mut config = state.config.lock().unwrap().clone();
+    config.azure_key = key.trim().to_owned();
+    config.azure_region = region.trim().to_owned();
+    if let Some(azure) = config.azure() {
+        state.translator.check_azure(&azure).await.map_err(|e| e.message)?;
+    }
+    config::save(&app, &config).map_err(|e| format!("Couldn't save the config: {e}"))?;
+    state.translator.set_azure(config.azure());
+    *state.config.lock().unwrap() = config;
+    Ok(())
 }
 
 #[tauri::command]
@@ -208,7 +232,10 @@ fn register_hotkey(app: &AppHandle) {
 }
 
 fn reload_config(app: &AppHandle) {
-    *app.state::<AppState>().config.lock().unwrap() = config::load(app);
+    let state = app.state::<AppState>();
+    let config = config::load(app);
+    state.translator.set_azure(config.azure());
+    *state.config.lock().unwrap() = config;
     register_hotkey(app);
     let _ = app.emit("config-changed", ());
 }
@@ -286,9 +313,12 @@ fn main() {
         )
         .setup(|app| {
             let handle = app.handle();
+            let config = config::load(handle);
+            let translator = translate::Translator::new();
+            translator.set_azure(config.azure());
             app.manage(AppState {
-                translator: translate::Translator::new(),
-                config: Mutex::new(config::load(handle)),
+                translator,
+                config: Mutex::new(config),
                 hotkey_error: Mutex::new(None),
                 clipboard: Mutex::new(None),
                 previous_window: Mutex::new(0),
@@ -318,7 +348,7 @@ fn main() {
             }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![translate, ui_config, copy, hide, paste])
+        .invoke_handler(tauri::generate_handler![translate, ui_config, set_azure, copy, hide, paste])
         .run(tauri::generate_context!())
         .expect("error while running tradu");
 }
