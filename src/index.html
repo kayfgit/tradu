@@ -9,31 +9,25 @@
   <script src="main.js" defer></script>
 </head>
 <body>
-  <header data-tauri-drag-region>
-    <button id="from" class="lang" tabindex="-1" title="Source language (Ctrl+F)"></button>
-    <button id="swap" tabindex="-1" title="Swap languages (Ctrl+S)">⇄</button>
-    <button id="to" class="lang" tabindex="-1" title="Target language (Ctrl+T)"></button>
-    <span id="status" role="status"></span>
-  </header>
+  <main id="history" aria-label="History"></main>
+
+  <section id="live">
+    <span id="prompt" class="gutter"></span>
+    <textarea id="input" dir="auto" rows="1" spellcheck="false" aria-label="Text to translate"></textarea>
+    <span id="mark" class="gutter" hidden>⏎</span>
+    <textarea id="output" dir="auto" rows="1" readonly tabindex="-1" aria-label="Translation"></textarea>
+    <div id="meta"></div>
+  </section>
 
   <div id="picker" hidden>
-    <input id="query" autocomplete="off" spellcheck="false" placeholder="Type a language or code">
+    <input id="query" autocomplete="off" spellcheck="false">
     <ol id="matches"></ol>
   </div>
 
-  <main>
-    <section class="source">
-      <textarea id="input" dir="auto" rows="1" spellcheck="false" placeholder="Type to translate"></textarea>
-      <p id="src-translit" class="translit"></p>
-      <p id="correction" class="correction"></p>
-    </section>
-    <section class="target">
-      <textarea id="output" dir="auto" rows="1" readonly tabindex="-1" aria-label="Translation"></textarea>
-      <p id="translit" class="translit"></p>
-      <div id="dict"></div>
-    </section>
-  </main>
-
-  <footer id="hints"></footer>
+  <footer data-tauri-drag-region>
+    <button id="pair" tabindex="-1" title="Languages (Ctrl+L)"></button>
+    <span id="info" role="status" data-tauri-drag-region></span>
+    <span id="hints" data-tauri-drag-region></span>
+  </footer>
 </body>
 </html>

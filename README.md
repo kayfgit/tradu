@@ -25,6 +25,7 @@ To uninstall, use **Settings › Apps**, or run `& "$env:LOCALAPPDATA\tradu\unin
 - **Instant:** it stays resident in the tray, and the popup takes focus about 30 ms after the hotkey.
 - **Live:** it translates as you type, and Enter always copies the result for exactly what's on screen.
 - **Learner-friendly:** it shows romanization (`家` → *Ie*), dictionary alternatives for single words, and pronunciation.
+- **Terminal-like:** a history of earlier translations you can step through with ↑, and a `:` command line for switching languages.
 - **Light:** a 4 MB binary using about 80 MB of memory in total (the Rust process plus a trimmed WebView2).
 - Covers 137 languages, with fuzzy search by English name, native name or code.
 
@@ -32,7 +33,7 @@ To uninstall, use **Settings › Apps**, or run `& "$env:LOCALAPPDATA\tradu\unin
 
 The global hotkey is **Ctrl+Shift+Space**. You can change it in the config.
 
-- **Nothing selected:** the popup opens with your last languages, ready to type.
+- **Nothing selected:** the popup opens with an empty line and your last languages, ready to type.
 - **Text selected** in any app: the popup opens with that text in it and translates it straight away. Press Enter to copy the translation, or Ctrl+Enter to paste it over the selection (in an editable field).
 
 ### Typing
@@ -48,12 +49,32 @@ The global hotkey is **Ctrl+Shift+Space**. You can change it in the config.
 | **Ctrl+L** | Pick source language, then target language |
 | **Ctrl+F** / **Ctrl+T** | Pick only the source (*from*) or only the target (*to*) |
 | **Ctrl+P** / **Ctrl+Shift+P** | Listen to the translation / the input |
-| **Ctrl+Shift+C** | Copy translation, stay open |
+| **Ctrl+Shift+C** | Copy translation and start the next one |
+| **↑** / **↓** | Step through earlier translations |
+| **:** | On an empty line: type a command (see below) |
 | **Ctrl+O** | Translate exactly what you typed, without corrections (press again to undo) |
 | **Tab** | Move into the translation to select part of it |
 | **Esc** | Close |
 
-When the popup opens, your previous text is still there but selected, so typing replaces it.
+### History
+
+Every translation you copy, paste or close the popup on is kept above the input, newest at the bottom as `[1]`. The entry whose translation is on your clipboard is tagged `copied` (or `pasted`).
+
+**↑** and **↓** step through the history like a shell: the entry comes back with its languages and translation, without a new request. The last 50 translations are kept across restarts, and `:clear` empties the list.
+
+### Commands
+
+Type **:** on an empty line, then press **Enter** to run the command. A preview of what it will do shows as you type.
+
+| Command | Does |
+| --- | --- |
+| `:ja` | Translate into Japanese |
+| `:de en` | Translate German into English (`:auto en` to detect the source) |
+| `:swap` | Swap the languages |
+| `:clear` | Clear the history |
+| `:help` | List the keys and commands |
+
+Languages match fuzzily, like in the picker: `:german english` and `:deu eng` work too.
 
 ### In the translation (after Tab)
 
@@ -154,7 +175,7 @@ To iterate on the UI without rebuilding, serve `src/` (for example `python -m ht
 ## How it's built
 
 - **Tauri 2 / Rust backend** (`src-tauri/src`): global hotkey, tray, single instance, clipboard, and translation requests. `origin.rs` handles the app you came from: reading its selection and pasting back into it. The HTTP connection is warmed up when the popup opens, so the first translation doesn't pay for a TLS handshake.
-- **Frontend** (`src/`): plain HTML, CSS and JS with no framework or bundler. All the keyboard logic is in `main.js`.
+- **Frontend** (`src/`): plain HTML, CSS and JS with no framework or bundler. All the keyboard logic is in `main.js`. It's set in JetBrains Mono when that's installed, falling back to Cascadia Mono, then Consolas, so no font is bundled.
 - WebView2 runs with software rendering, and the network service runs inside the main process. For a small text UI this halves memory, from about 160 MB to about 80 MB.
 
 **Why not a GPU-native toolkit (egui, iced)?** A translator has to render *every* script correctly: Arabic and Hebrew right-to-left, Devanagari and Thai shaping, CJK glyph variants. It also needs working IME input for Japanese, Chinese and Korean. The system web engine gets all of that right for free, and the lighter toolkits still don't.

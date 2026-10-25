@@ -2,10 +2,11 @@
 
 const $ = id => document.getElementById(id);
 const el = {
-  from: $('from'), to: $('to'), swap: $('swap'), status: $('status'),
+  history: $('history'),
+  prompt: $('prompt'), input: $('input'),
+  mark: $('mark'), output: $('output'), meta: $('meta'),
+  pair: $('pair'), info: $('info'), hints: $('hints'),
   picker: $('picker'), query: $('query'), matches: $('matches'),
-  input: $('input'), srcTranslit: $('src-translit'), correction: $('correction'),
-  output: $('output'), translit: $('translit'), dict: $('dict'), hints: $('hints'),
 };
 
 // ---------------------------------------------------------------- backend
@@ -44,7 +45,7 @@ function browserApi() {
         detected: json.src || null,
         translit: s.find(x => x.translit)?.translit || null,
         src_translit: s.find(x => x.src_translit)?.src_translit || null,
-        dict: (json.dict ?? []).map(d => ({ pos: d.pos ?? '', terms: d.terms ?? [] })),
+        dict: (json.dict ?? []).map(d => ({ pos: d.pos ?? '', terms: d.terms ?? [], base: d.base_form || null })),
         correction: spell && spell !== text
           ? { text: spell, kind: json.spell.correction_type?.includes(6) ? 'script' : 'spelling' }
           : null,
@@ -53,17 +54,19 @@ function browserApi() {
     copy: text => navigator.clipboard.writeText(text),
     paste: text => navigator.clipboard.writeText(text),
     hide: async () => {},
-    config: async () => ({ start_in: 'input', debounce_ms: 200, hotkey: '', hotkey_error: null }),
+    config: async () => ({ start_in: 'input', debounce_ms: 400, hotkey: '', hotkey_error: null }),
     on: () => {},
   };
 }
 
 // ---------------------------------------------------------------- state
 
-let config = { start_in: 'input', debounce_ms: 200, hotkey: '', hotkey_error: null };
+let config = { start_in: 'input', debounce_ms: 400, hotkey: '', hotkey_error: null };
+
+const HISTORY_MAX = 50;
 
 const store = Object.assign(
-  { from: 'auto', to: 'en', recent: { from: [], to: [] }, text: '' },
+  { from: 'auto', to: 'en', recent: { from: [], to: [] }, history: [] },
   readStore(),
 );
 
@@ -77,7 +80,7 @@ function saveStore() {
 const AUTO = ['auto', 'Detect language', ''];
 const byCode = new Map(LANGS.map(l => [l[0], l]));
 const canon = code => ALIASES[code] ?? code;
-const nameOf = code => byCode.get(canon(code))?.[1] ?? code;
+const nameOf = code => (code === 'auto' ? 'Detect language' : byCode.get(canon(code))?.[1] ?? code);
 // Google's legacy codes aren't valid BCP 47; the lang attribute picks CJK glyph variants.
 const htmlLang = code => ({ iw: 'he', jw: 'jv', auto: '' })[code] ?? code;
 
@@ -109,6 +112,7 @@ function languagePair() {
 /** Translates the current input right away (or reuses a cached/in-flight result). */
 function translateNow() {
   clearTimeout(timer);
+  if (commandMode) return Promise.resolve(null);
   const text = requestText();
   const key = keyOf();
   if (!text) {
@@ -128,8 +132,7 @@ function translateNow() {
   lastRequestAt = Date.now();
   const promise = api.translate(text, store.from, store.to, { pair: languagePair(), asTyped }).then(
     result => {
-      cache.set(key, result);
-      if (cache.size > 300) cache.delete(cache.keys().next().value);
+      remember(key, result);
       if (keyOf() !== key) {
         // Still typing: show this in-between result (dimmed) unless a newer one is up.
         if (seq > shownSeq && keyOf().startsWith(langs)) {
@@ -161,6 +164,11 @@ function translateNow() {
   return promise;
 }
 
+function remember(key, result) {
+  cache.set(key, result);
+  if (cache.size > 300) cache.delete(cache.keys().next().value);
+}
+
 /** The translation of exactly what's on screen, waiting for it if needed. */
 async function settled() {
   try { return await translateNow(); } catch { return null; }
@@ -190,7 +198,7 @@ function showError(err, key) {
   if (!retryIn) return setStatus(err?.message ?? String(err), 'error');
   const retryAt = Date.now() + retryIn;
   const tick = () => {
-    setStatus(`Google rate limit, retrying in ${Math.max(1, Math.ceil((retryAt - Date.now()) / 1000))} s`, 'error');
+    setStatus(`google rate limit, retrying in ${Math.max(1, Math.ceil((retryAt - Date.now()) / 1000))}s`, 'error');
   };
   tick();
   countdown = setInterval(tick, 1000);
@@ -205,82 +213,272 @@ function showError(err, key) {
 function show(result, { stale = false } = {}) {
   current = result;
   document.body.classList.toggle('stale', stale);
+  el.output.classList.remove('error');
   el.output.value = result?.text ?? '';
-  el.translit.textContent = result?.translit ?? '';
-  // Romanizing text that was converted from romaji just echoes it back, oddly
-  // ("Korehana ndesu ka").
-  const typedRomanized = result?.correction?.kind === 'script' && !asTyped;
-  el.srcTranslit.textContent = typedRomanized ? '' : result?.src_translit ?? '';
-  renderCorrection(result);
-  renderDict(result?.dict ?? []);
-  renderLangs();
+  el.mark.hidden = !result?.text;
+  renderMeta(result);
+  renderPair();
   fit(el.output);
   if (result) {
     clearTimeout(retryTimer);
     clearInterval(countdown);
+    if (statusKind === 'error' && !config.hotkey_error) setStatus('');
   }
-  if (el.status.classList.contains('error') && !config.hotkey_error) setStatus('');
   setHints();
 }
 
-/** "Read as ありがとう", or "Corrected to läuft", with the key that undoes it. */
-function renderCorrection(result) {
-  el.correction.replaceChildren();
-  const correction = result?.correction;
-  if (!result || (!correction && !asTyped)) return;
-  const label = asTyped
-    ? (correction ? 'Translating as typed, not ' : 'Translating as typed')
-    : (correction.kind === 'script' ? 'Read as ' : 'Corrected to ');
-  el.correction.append(label);
-  if (correction) {
-    const mark = document.createElement('mark');
-    mark.textContent = correction.text;
-    mark.lang = htmlLang(result.detected ?? '');
-    el.correction.append(mark);
-  }
-  const undo = document.createElement('span');
-  undo.className = 'undo';
-  const kbd = document.createElement('kbd');
-  kbd.textContent = 'Ctrl+O';
-  undo.append(kbd, asTyped ? 'use corrections' : 'use what I typed');
-  el.correction.append(undo);
+/** Alternatives for a single word, minus the translation itself. */
+function alternatives(result) {
+  const main = (result?.text ?? '').trim().toLowerCase();
+  const terms = (result?.dict ?? []).flatMap(d => d.terms);
+  return [...new Set(terms)].filter(t => t.toLowerCase() !== main);
 }
 
-function renderDict(dict) {
+/** "noun · Unterlage": the word's part of speech and dictionary form. */
+function grammar(result, text) {
+  const entry = result?.dict?.[0];
+  if (!entry) return '';
+  const base = entry.base && entry.base.toLowerCase() !== text.toLowerCase() ? entry.base : '';
+  return [entry.pos, base].filter(Boolean).join(' · ');
+}
+
+/** Lines under the live translation: what was corrected, then romanization and alternatives. */
+function renderMeta(result) {
+  el.meta.replaceChildren();
   dictTerms = [];
-  el.dict.replaceChildren();
-  for (const { pos, terms } of dict.slice(0, 4)) {
-    const label = document.createElement('div');
-    label.className = 'pos';
-    label.textContent = pos || 'other';
-    const row = document.createElement('div');
-    row.className = 'terms';
-    for (const term of terms.slice(0, 8)) {
-      const span = document.createElement('span');
-      if (dictTerms.length < 9) {
-        const n = document.createElement('b');
-        n.textContent = dictTerms.length + 1;
-        span.append(n);
-      }
-      span.append(term);
-      span.addEventListener('click', () => commit('copy', term));
-      dictTerms.push(term);
-      row.append(span);
-    }
-    el.dict.append(label, row);
+  if (!result) return;
+  const line = (...parts) => {
+    const div = document.createElement('div');
+    div.append(...parts);
+    el.meta.append(div);
+    return div;
+  };
+  const span = (text, className, lang) => {
+    const s = document.createElement('span');
+    s.textContent = text;
+    if (className) s.className = className;
+    if (lang) s.lang = lang;
+    return s;
+  };
+
+  const correction = result.correction;
+  if (correction || asTyped) {
+    const label = asTyped
+      ? (correction ? 'as typed, not' : 'as typed')
+      : (correction.kind === 'script' ? 'read as' : 'corrected to');
+    const row = line(span(label));
+    if (correction) row.append(span(correction.text, 'value', htmlLang(result.detected ?? '')));
+    const key = span('', 'key');
+    key.append(Object.assign(document.createElement('b'), { textContent: '^O' }), asTyped ? ' use corrections' : ' as typed');
+    row.append(key);
   }
+
+  // Romanizing text that was converted from romaji just echoes it back, oddly
+  // ("Korehana ndesu ka"), so only show the input's reading for typed scripts.
+  const parts = [];
+  const inputReading = correction?.kind === 'script' && !asTyped ? null : result.src_translit;
+  if (inputReading) parts.push(span(inputReading));
+  if (result.translit) parts.push(Object.assign(document.createElement('i'), { textContent: result.translit }));
+  dictTerms = alternatives(result).slice(0, 9);
+  if (dictTerms.length) parts.push(span(dictTerms.slice(0, 6).join(' · ')));
+  const info = grammar(result, requestText());
+  if (info) parts.push(span(info, 'grammar'));
+  if (parts.length) line(...parts);
+}
+
+// ---------------------------------------------------------------- history
+
+let recall = 0;   // 0: the line being typed; n: the nth newest history entry
+let draft = '';
+let helpShown = false;
+
+/**
+ * Moves what's on screen into the history. `action` ('copied'/'pasted') marks
+ * the entry whose translation is now on the clipboard.
+ */
+function archive(action) {
+  const text = requestText();
+  const result = cache.get(keyOf());
+  if (!text || !result || commandMode) return;
+  const same = e => e.text === text && e.from === store.from && e.to === store.to;
+  store.history = store.history.filter(e => !same(e));
+  if (action) store.history.forEach(e => delete e.action);
+  store.history.push({ text, from: store.from, to: store.to, result, ...(action && { action }) });
+  store.history = store.history.slice(-HISTORY_MAX);
+  saveStore();
+  el.input.value = '';
+  recall = 0;
+  fit(el.input, 124);
+  show(null);
+  renderHistory();
+}
+
+function renderHistory() {
+  helpShown = false;
+  const entries = store.history;
+  if (!entries.length) {
+    const empty = document.createElement('p');
+    empty.className = 'empty';
+    empty.textContent = 'Type to translate. Earlier translations show up here: ↑ brings them back, :help lists everything else.';
+    el.history.replaceChildren(empty);
+    renderInfo();
+    return;
+  }
+  el.history.replaceChildren(...entries.map((entry, i) => {
+    const n = entries.length - i;
+    const div = document.createElement('div');
+    div.className = n === recall ? 'entry recalled' : 'entry';
+    const lang = htmlLang(entry.result.detected ?? entry.from);
+    const num = Object.assign(document.createElement('span'), { className: 'n', textContent: `[${n}]` });
+    const src = Object.assign(document.createElement('span'), { className: 'src', textContent: `› ${entry.text}`, lang });
+    const dst = document.createElement('div');
+    dst.className = 'dst';
+    dst.lang = htmlLang(entry.to);
+    const words = [entry.result.text, ...alternatives(entry.result).slice(0, 2)].join(' · ');
+    dst.append(Object.assign(document.createElement('span'), { textContent: words }));
+    if (entry.action) dst.append(Object.assign(document.createElement('span'), { className: 'badge', textContent: entry.action }));
+    div.append(num, src, dst);
+    const info = grammar(entry.result, entry.text) || entry.result.translit;
+    if (info) div.append(Object.assign(document.createElement('span'), { className: 'info', textContent: info }));
+    return div;
+  }));
+  el.history.scrollTop = el.history.scrollHeight;
+  renderInfo();
+}
+
+/** ↑/↓ through earlier translations, like a shell. Returns whether it moved. */
+function recallEntry(step) {
+  const n = recall + step;
+  if (n < 0 || n > store.history.length) return false;
+  if (recall === 0) draft = el.input.value;
+  recall = n;
+  if (n === 0) {
+    el.input.value = draft;
+  } else {
+    const entry = store.history.at(-n);
+    store.from = entry.from;
+    store.to = entry.to;
+    saveStore();
+    el.input.value = entry.text;
+    asTyped = false;
+    remember(keyOf(), entry.result);
+  }
+  fit(el.input, 124);
+  el.input.setSelectionRange(el.input.value.length, el.input.value.length);
+  renderHistory();
+  translateNow().catch(() => {});
+  return true;
+}
+
+function clearHistory() {
+  store.history = [];
+  saveStore();
+  renderHistory();
+}
+
+const HELP = [
+  ['Translating'],
+  ['⏎', 'copy the translation and close'],
+  ['^⏎', 'paste it into the app you came from'],
+  ['^⇧C', 'copy it and keep going'],
+  ['alt 1-9', 'copy an alternative'],
+  ['↑ ↓', 'step through history'],
+  ['tab', 'select part of the translation'],
+  ['^S', 'swap languages'],
+  ['^L ^F ^T', 'pick both languages, the source, the target'],
+  ['^O', 'translate as typed, without corrections'],
+  ['^P ^⇧P', 'listen to the translation, the input'],
+  ['Commands'],
+  [':ja', 'translate into Japanese'],
+  [':de en', 'German into English (auto for detect)'],
+  [':swap :clear', 'swap languages, clear history'],
+];
+
+function showHelp() {
+  const div = document.createElement('div');
+  div.className = 'help';
+  for (const [key, text] of HELP) {
+    if (!text) {
+      div.append(Object.assign(document.createElement('span'), { className: 'head', textContent: key }));
+      continue;
+    }
+    div.append(Object.assign(document.createElement('b'), { textContent: key }), Object.assign(document.createElement('span'), { textContent: text }));
+  }
+  el.history.replaceChildren(div);
+  el.history.scrollTop = el.history.scrollHeight;
+  helpShown = true;
+}
+
+// ---------------------------------------------------------------- commands
+
+let commandMode = false;
+
+function enterCommand() {
+  commandMode = true;
+  document.body.classList.add('command');
+  el.input.value = '';
+  previewCommand();
+  renderPair();
+  setHints();
+}
+
+function exitCommand() {
+  commandMode = false;
+  document.body.classList.remove('command');
+  el.input.value = '';
+  fit(el.input, 124);
+  show(null);
+}
+
+const resolveLang = (word, which) => findMatches(which, word)[0]?.[0] ?? null;
+
+/** Reads a command line into { label, run } or { error }. */
+function parseCommand(line) {
+  const words = line.trim().toLowerCase().split(/[\s>→,]+/).filter(Boolean);
+  if (!words.length) return { label: 'a language (ja), two languages (de en), swap, clear or help' };
+  const [first] = words;
+  if (words.length === 1 && (first === 'swap' || first === 's')) return { label: 'swap languages', run: swap };
+  if (words.length === 1 && first === 'clear') {
+    return { label: `clear history (${store.history.length})`, run: clearHistory };
+  }
+  if (words.length === 1 && ['help', 'h', '?'].includes(first)) return { label: 'list keys and commands', run: showHelp };
+  if (words.length > 2) return { error: 'give one language (target) or two (source and target)' };
+  const langs = words.map((w, i) => resolveLang(w, words.length === 2 && i === 0 ? 'from' : 'to'));
+  const unknown = words.find((_, i) => !langs[i]);
+  if (unknown) return { error: `no language matches "${unknown}"` };
+  if (langs.length === 1) return { label: `translate into ${nameOf(langs[0])}`, run: () => setLang('to', langs[0]) };
+  return { label: `${nameOf(langs[0])} → ${nameOf(langs[1])}`, run: () => setPair(langs[0], langs[1]) };
+}
+
+function previewCommand() {
+  const cmd = parseCommand(el.input.value);
+  el.mark.hidden = false;
+  el.output.value = cmd.error ?? cmd.label;
+  el.output.classList.toggle('error', !!cmd.error);
+  el.meta.replaceChildren();
+  document.body.classList.remove('stale');
+  fit(el.output);
+}
+
+function runCommand() {
+  const cmd = parseCommand(el.input.value);
+  if (!cmd.run) return;
+  exitCommand();
+  cmd.run();
+  if (cmd.run !== showHelp) renderHistory();
 }
 
 // ---------------------------------------------------------------- languages
 
-function renderLangs() {
+/** The DE→EN block and the input's prompt. */
+function renderPair() {
   const detected = store.from === 'auto' ? current?.detected : null;
-  if (store.from !== 'auto') el.from.textContent = nameOf(store.from);
-  else if (detected) el.from.innerHTML = `${escapeHtml(nameOf(detected))}<small>detected</small>`;
-  else el.from.textContent = 'Detect language';
-  el.to.textContent = nameOf(store.to);
-  el.input.lang = htmlLang(detected ?? store.from);
+  const source = canon(detected ?? store.from);
+  el.pair.textContent = `${source}→${store.to}`.toUpperCase();
+  el.prompt.textContent = commandMode ? ':' : `${source}›`;
+  el.input.lang = htmlLang(source);
   el.output.lang = htmlLang(store.to);
+  renderInfo();
 }
 
 function setLang(which, code) {
@@ -291,11 +489,26 @@ function setLang(which, code) {
     if (previous && canon(previous) !== code) store[other] = canon(previous);
   }
   store[which] = code;
-  store.recent[which] = [code, ...store.recent[which].filter(c => c !== code)].slice(0, 9);
+  addRecent(which, code);
   pickedKey = keyOf();
   saveStore();
-  renderLangs();
+  renderPair();
   translateNow().catch(() => {});
+}
+
+function setPair(from, to) {
+  store.from = from;
+  store.to = to;
+  addRecent('from', from);
+  addRecent('to', to);
+  pickedKey = keyOf();
+  saveStore();
+  renderPair();
+  translateNow().catch(() => {});
+}
+
+function addRecent(which, code) {
+  store.recent[which] = [code, ...store.recent[which].filter(c => c !== code)].slice(0, 9);
 }
 
 /** The most recently used language other than the current target, if any. */
@@ -307,14 +520,13 @@ function alternateTarget() {
 async function swap() {
   const result = await settled();
   const from = store.from === 'auto' ? result?.detected : store.from;
-  if (!from) return setStatus('Type something first so the language can be detected', 'error');
+  if (!from) return setStatus('type something first so the language can be detected', 'error');
   store.from = store.to;
   store.to = canon(from);
   if (result?.text) el.input.value = result.text;
-  store.text = el.input.value;
   saveStore();
-  fit(el.input, 120);
-  renderLangs();
+  fit(el.input, 124);
+  renderPair();
   translateNow().catch(() => {});
 }
 
@@ -324,14 +536,11 @@ let picking = null; // { which, chain, items, sel }
 
 /** `chain`: after picking the source, go on to the target (the Ctrl+L flow). */
 function openPicker(which, chain) {
+  if (commandMode) exitCommand();
   picking = { which, chain, items: [], sel: 0 };
-  el.from.classList.toggle('active', which === 'from');
-  el.to.classList.toggle('active', which === 'to');
-  const chip = which === 'from' ? el.from : el.to;
-  el.picker.style.left = `${Math.min(chip.offsetLeft, document.body.clientWidth - 310)}px`;
   el.picker.hidden = false;
   el.query.value = '';
-  el.query.placeholder = which === 'from' ? 'Translate from…' : 'Translate to…';
+  el.query.placeholder = which === 'from' ? 'translate from…' : 'translate to…';
   renderMatches();
   el.query.focus();
   setHints();
@@ -340,8 +549,6 @@ function openPicker(which, chain) {
 function closePicker() {
   picking = null;
   el.picker.hidden = true;
-  el.from.classList.remove('active');
-  el.to.classList.remove('active');
 }
 
 /** Picks `code` (or keeps the current language when null) and moves focus on. */
@@ -402,16 +609,18 @@ function renderMatches() {
   el.matches.replaceChildren(
     ...picking.items.map(([code, name, native], i) => {
       const li = document.createElement('li');
-      li.innerHTML = `<span class="n">${quick ? i + 1 : ''}</span><span></span><span class="native"></span>`;
-      li.children[1].textContent = name;
-      li.children[2].textContent = native !== name ? native : '';
-      li.children[2].lang = htmlLang(code);
+      li.innerHTML = '<span class="n"></span><span class="code"></span><span></span><span class="native"></span>';
+      li.children[0].textContent = quick ? i + 1 : '';
+      li.children[1].textContent = code;
+      li.children[2].textContent = name;
+      li.children[3].textContent = native !== name ? native : '';
+      li.children[3].lang = htmlLang(code);
       li.addEventListener('mousedown', e => { e.preventDefault(); choose(code); });
       return li;
     }),
   );
   if (!picking.items.length) {
-    el.matches.innerHTML = '<li class="empty">No language matches</li>';
+    el.matches.innerHTML = '<li class="none">no language matches</li>';
   }
   highlight();
 }
@@ -453,26 +662,21 @@ el.query.addEventListener('blur', () => {
   closePicker();
   setHints();
 });
-el.from.addEventListener('click', () => openPicker('from', false));
-el.to.addEventListener('click', () => openPicker('to', false));
-el.swap.addEventListener('click', swap);
+el.pair.addEventListener('click', () => openPicker('from', true));
 
 // ---------------------------------------------------------------- actions
 
 /**
  * copy: copy and close · paste: close and paste into the previous window ·
- * keep: copy and stay open. `text` defaults to the full translation.
+ * keep: copy and stay open for the next one. `text` defaults to the translation.
  */
 async function commit(mode, text) {
   text ??= (await settled())?.text;
   if (!text) return;
+  // Archive first: closing the popup blurs it, which archives without the action.
+  archive(mode === 'paste' ? 'pasted' : 'copied');
   try {
-    if (mode === 'keep') {
-      await api.copy(text);
-      setStatus('Copied', 'done');
-      setTimeout(() => el.status.textContent === 'Copied' && setStatus(''), 1200);
-      return;
-    }
+    if (mode === 'keep') return await api.copy(text);
     audio.pause();
     if (mode === 'paste') await api.paste(text);
     else {
@@ -480,13 +684,15 @@ async function commit(mode, text) {
       await api.hide();
     }
   } catch (err) {
-    setStatus(String(err), 'error');
+    setStatus(err?.message ?? String(err), 'error');
   }
 }
 
 function hide() {
   audio.pause();
   closePicker();
+  if (commandMode) exitCommand();
+  archive(null);
   api.hide();
 }
 
@@ -496,7 +702,7 @@ function speak(text, lang) {
   if (!text?.trim() || !lang || lang === 'auto') return;
   const params = new URLSearchParams({ client: 'gtx', ie: 'UTF-8', tl: lang, q: text.slice(0, 200) });
   audio.src = `https://translate.googleapis.com/translate_tts?${params}`;
-  audio.play().catch(() => setStatus("Couldn't play audio", 'error'));
+  audio.play().catch(() => setStatus("couldn't play audio", 'error'));
 }
 
 function selectedOutput() {
@@ -507,21 +713,37 @@ function selectedOutput() {
 // ---------------------------------------------------------------- keyboard
 
 el.input.addEventListener('input', () => {
-  fit(el.input, 120);
-  store.text = el.input.value;
-  saveStore();
+  fit(el.input, 124);
+  recall = 0;
+  if (helpShown) renderHistory();
+  if (commandMode) return previewCommand();
   if (!requestText()) asTyped = false;
   scheduleTranslation();
 });
 
+const onFirstLine = () => !el.input.value.slice(0, el.input.selectionStart).includes('\n');
+const onLastLine = () => !el.input.value.slice(el.input.selectionEnd).includes('\n');
+
 el.input.addEventListener('keydown', e => {
   if (e.isComposing || e.keyCode === 229) return; // IME is still composing
-  if (e.key === 'Enter' && !e.shiftKey && !e.altKey) {
+  if (commandMode) {
+    if (e.key === 'Enter') { e.preventDefault(); runCommand(); }
+    else if (e.key === 'Escape' || (e.key === 'Backspace' && !el.input.value)) { e.preventDefault(); exitCommand(); }
+    return;
+  }
+  if (e.key === ':' && !el.input.value) {
+    e.preventDefault();
+    enterCommand();
+  } else if (e.key === 'Enter' && !e.shiftKey && !e.altKey) {
     e.preventDefault();
     commit(e.ctrlKey || e.metaKey ? 'paste' : 'copy');
   } else if (e.key === 'Escape') {
     e.preventDefault();
     hide();
+  } else if (e.key === 'ArrowUp' && !e.shiftKey && onFirstLine()) {
+    if (recallEntry(1)) e.preventDefault();
+  } else if (e.key === 'ArrowDown' && !e.shiftKey && recall > 0 && onLastLine()) {
+    if (recallEntry(-1)) e.preventDefault();
   } else if (e.key === 'Tab' && !e.shiftKey && el.output.value) {
     e.preventDefault();
     el.output.focus();
@@ -576,33 +798,53 @@ document.addEventListener('contextmenu', e => {
   if (!e.target.matches('textarea, input')) e.preventDefault();
 });
 
+// Closing by clicking away (the app hides on blur) files the translation too.
+window.addEventListener('blur', () => archive(null));
+
 // ---------------------------------------------------------------- chrome
 
 const HINTS = {
-  input: [['Enter', 'copy'], ['Ctrl+Enter', 'paste back'], ['Ctrl+S', 'swap'], ['Ctrl+L', 'languages'], ['Ctrl+P', 'listen'], ['Esc', 'close']],
-  dict: [['Enter', 'copy'], ['Alt+1–9', 'copy alternative'], ['Ctrl+Enter', 'paste back'], ['Ctrl+S', 'swap'], ['Ctrl+L', 'languages'], ['Esc', 'close']],
-  output: [['Shift+arrows', 'select'], ['Enter', 'copy selection'], ['Ctrl+Enter', 'paste selection'], ['Ctrl+Shift+C', 'copy, stay'], ['Tab', 'back']],
-  picker: [['↑↓', 'move'], ['Enter', 'pick'], ['1–9', 'quick pick'], ['Esc', 'keep current'], ['Shift+Tab', 'back']],
+  input: [['↑', 'recall'], ['⏎', 'copy'], ['^⏎', 'paste'], ['^S', 'swap'], [':', 'command']],
+  dict: [['⏎', 'copy'], ['alt 1-9', 'alternative'], ['^⏎', 'paste'], ['^S', 'swap'], [':', 'command']],
+  output: [['⇧ ←→', 'select'], ['⏎', 'copy'], ['^⏎', 'paste'], ['tab', 'back']],
+  picker: [['↑↓', 'move'], ['⏎', 'pick'], ['1-9', 'quick pick'], ['esc', 'keep'], ['⇧tab', 'back']],
+  command: [['⏎', 'run'], ['esc', 'cancel']],
 };
 
 function setHints() {
   const which = picking ? 'picker'
+    : commandMode ? 'command'
     : document.activeElement === el.output ? 'output'
     : dictTerms.length ? 'dict' : 'input';
   el.hints.replaceChildren(...HINTS[which].map(([key, label]) => {
     const span = document.createElement('span');
-    const kbd = document.createElement('kbd');
-    kbd.textContent = key;
-    span.append(kbd, label);
+    span.append(Object.assign(document.createElement('b'), { textContent: key }), label);
     return span;
   }));
 }
 
+let statusText = '';
+let statusKind = '';
+
+/** A message for the status bar; empty brings back the history count. */
 function setStatus(text, kind = '') {
+  statusText = text;
+  statusKind = kind;
+  renderInfo();
+}
+
+function renderInfo() {
+  let text = statusText;
+  let kind = statusKind;
   if (!text && config.hotkey_error) [text, kind] = [config.hotkey_error, 'error'];
-  el.status.textContent = text;
-  el.status.className = kind;
-  el.status.title = text;
+  if (!text) {
+    const parts = [`history ${store.history.length}`];
+    if (store.from === 'auto') parts.push('auto-detect');
+    text = parts.join('   ');
+  }
+  el.info.textContent = text;
+  el.info.title = text;
+  el.info.className = kind;
 }
 
 function focusInput() {
@@ -615,10 +857,6 @@ function fit(textarea, max = Infinity) {
   textarea.style.height = `${Math.min(textarea.scrollHeight, max)}px`;
 }
 
-function escapeHtml(s) {
-  return s.replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
-}
-
 let touchedSinceSummon = false;
 document.addEventListener('keydown', () => { touchedSinceSummon = true; }, true);
 document.addEventListener('mousedown', () => { touchedSinceSummon = true; }, true);
@@ -627,19 +865,20 @@ document.addEventListener('mousedown', () => { touchedSinceSummon = true; }, tru
 function onSummon(selection) {
   touchedSinceSummon = false;
   asTyped = false;
+  recall = 0;
   closePicker();
+  if (commandMode) exitCommand();
+  renderHistory();
   if (selection) return useSelection(selection);
   if (config.start_in === 'source') return openPicker('from', true);
   focusInput();
-  el.input.select(); // previous text stays visible; typing replaces it
+  el.input.select(); // an unfinished line stays; typing replaces it
 }
 
 function useSelection(text) {
   closePicker();
   el.input.value = text.trim();
-  store.text = el.input.value;
-  saveStore();
-  fit(el.input, 120);
+  fit(el.input, 124);
   focusInput();
   el.input.select();
   translateNow().catch(() => {});
@@ -647,19 +886,17 @@ function useSelection(text) {
 
 async function loadConfig() {
   config = { ...config, ...(await api.config().catch(() => ({}))) };
-  setStatus('');
+  renderInfo();
 }
 
 (async () => {
   await loadConfig();
-  el.input.value = store.text;
-  fit(el.input, 120);
-  renderLangs();
-  setHints();
+  renderPair();
+  renderHistory();
+  show(null);
   api.on('summon', e => onSummon(e.payload));
   // The app took longer than the popup to copy its selection.
   api.on('selection', e => touchedSinceSummon || useSelection(e.payload));
   api.on('config-changed', loadConfig);
-  if (el.input.value.trim()) translateNow().catch(() => {});
   onSummon();
 })();

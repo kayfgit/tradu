@@ -42,6 +42,8 @@ pub struct Translation {
 pub struct DictEntry {
     pub pos: String,
     pub terms: Vec<String>,
+    /// Dictionary form of the input word ("Unterlage" for "Unterlagen").
+    pub base: Option<String>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -297,6 +299,7 @@ pub fn parse(json: &Value, input: &str) -> Translation {
                     .iter()
                     .filter_map(|t| t.as_str().map(str::to_owned))
                     .collect(),
+                base: non_empty(&d["base_form"]),
             })
         })
         .collect();
@@ -334,7 +337,7 @@ mod tests {
         let t = parse(
             &json(
                 r#"{"sentences":[{"trans":"家","orig":"house","backend":10},{"translit":"Ie"}],
-                    "dict":[{"pos":"noun","terms":["家","家屋"],"entry":[]}],"src":"en","spell":{}}"#,
+                    "dict":[{"pos":"noun","terms":["家","家屋"],"entry":[],"base_form":"house"}],"src":"en","spell":{}}"#,
             ),
             "house",
         );
@@ -343,6 +346,7 @@ mod tests {
         assert_eq!(t.detected.as_deref(), Some("en"));
         assert_eq!(t.dict[0].pos, "noun");
         assert_eq!(t.dict[0].terms, ["家", "家屋"]);
+        assert_eq!(t.dict[0].base.as_deref(), Some("house"));
         assert!(t.correction.is_none());
     }
 
