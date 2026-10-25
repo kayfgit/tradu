@@ -22,6 +22,8 @@ html, body { height: 100%; }
 body {
   display: grid;
   grid-template-rows: 1fr auto auto;
+  /* One column exactly as wide as the window: content never stretches it. */
+  grid-template-columns: minmax(0, 1fr);
   background: var(--bg);
   color: var(--text);
   font: 15px/1.55 var(--mono);

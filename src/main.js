@@ -976,27 +976,42 @@ window.addEventListener('blur', () => {
 
 // ---------------------------------------------------------------- chrome
 
+// [key, label, rank]: when the bar is too narrow, the highest ranks go first.
 const HINTS = {
-  input: [['↑', 'recall'], ['⏎', 'copy'], ['^⏎', 'paste'], ['^S', 'swap'], [':', 'command']],
-  dict: [['⏎', 'copy'], ['alt 1-N', 'alternative'], ['^⏎', 'paste'], ['^S', 'swap'], [':', 'command']],
-  output: [['⇧ ←→', 'select'], ['⏎', 'copy'], ['^⏎', 'paste'], ['tab', 'back']],
-  picker: [['↑↓', 'move'], ['⏎', 'pick'], ['1-9', 'quick pick'], ['esc', 'keep'], ['⇧tab', 'back']],
-  command: [['⏎', 'run'], ['esc', 'cancel']],
-  move: [['hjkl', 'move'], ['⇧', 'fine'], ['^', 'big'], ['esc', 'done']],
-  resize: [['hjkl', 'resize'], ['⇧', 'fine'], ['^', 'big'], ['esc', 'done']],
+  input: [['↑', 'recall', 3], ['⏎', 'copy', 0], ['^⏎', 'paste', 2], ['^S', 'swap', 4], [':', 'command', 1]],
+  dict: [['⏎', 'copy', 0], ['alt 1-N', 'alternative', 3], ['^⏎', 'paste', 2], ['^S', 'swap', 4], [':', 'command', 1]],
+  output: [['⇧ ←→', 'select', 1], ['⏎', 'copy', 0], ['^⏎', 'paste', 2], ['tab', 'back', 3]],
+  picker: [['↑↓', 'move', 1], ['⏎', 'pick', 0], ['1-9', 'quick pick', 3], ['esc', 'keep', 2], ['⇧tab', 'back', 4]],
+  command: [['⏎', 'run', 0], ['esc', 'cancel', 1]],
+  move: [['hjkl', 'move', 0], ['⇧', 'fine', 2], ['^', 'big', 3], ['esc', 'done', 1]],
+  resize: [['hjkl', 'resize', 0], ['⇧', 'fine', 2], ['^', 'big', 3], ['esc', 'done', 1]],
 };
+
+// The status text keeps at least this much of the bar before hints give way.
+const INFO_MIN_PX = 120;
 
 function setHints() {
   const which = windowMode ?? (picking ? 'picker'
     : commandMode ? 'command'
     : document.activeElement === el.output ? 'output'
     : dictTerms.length ? 'dict' : 'input');
-  el.hints.replaceChildren(...HINTS[which].map(([key, label]) => {
+  let hints = HINTS[which];
+  const render = () => el.hints.replaceChildren(...hints.map(([key, label]) => {
     const span = document.createElement('span');
     span.append(Object.assign(document.createElement('b'), { textContent: key.replace('N', dictTerms.length) }), label);
     return span;
   }));
+  render();
+  const room = () => el.hints.parentElement.clientWidth - el.pair.offsetWidth - INFO_MIN_PX;
+  while (hints.length > 1 && el.hints.offsetWidth > room()) {
+    const least = Math.max(...hints.map(h => h[2]));
+    hints = hints.filter(h => h[2] !== least);
+    render();
+  }
 }
+
+// :resize (or anything else) changing the width can make hints fit, or stop fitting.
+window.addEventListener('resize', () => setHints());
 
 // Messages show for a few seconds, then the status bar goes back to its usual line.
 const MESSAGE_MS = 4000;
