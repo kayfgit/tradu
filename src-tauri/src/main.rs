@@ -2,6 +2,7 @@
 
 mod config;
 mod origin;
+mod romaji;
 mod translate;
 
 use std::sync::Mutex;
@@ -18,7 +19,7 @@ use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 struct AppState {
-    http: reqwest::Client,
+    translator: translate::Translator,
     config: Mutex<Config>,
     hotkey_error: Mutex<Option<String>>,
     // Kept alive for the whole session: on Linux the clipboard empties when its owner drops.
@@ -45,8 +46,18 @@ async fn translate(
     text: String,
     from: String,
     to: String,
-) -> Result<translate::Translation, String> {
-    translate::google(&state.http, &text, &from, &to).await
+    pair: Option<Vec<String>>,
+    as_typed: Option<bool>,
+) -> Result<translate::Translation, translate::Error> {
+    let pair = pair.unwrap_or_default();
+    let request = translate::Request {
+        text: &text,
+        from: &from,
+        to: &to,
+        pair: &pair,
+        as_typed: as_typed.unwrap_or(false),
+    };
+    state.translator.translate(request).await
 }
 
 #[tauri::command]
@@ -158,8 +169,6 @@ fn show(app: &AppHandle, selection: Option<String>) {
     let Some(window) = app.get_webview_window("main") else { return };
     let state = app.state::<AppState>();
     *state.previous_window.lock().unwrap() = origin::foreground();
-    let http = state.http.clone();
-    tauri::async_runtime::spawn(async move { translate::warm_up(&http).await });
 
     place_on_cursor_monitor(&window);
     let _ = window.show();
@@ -278,7 +287,7 @@ fn main() {
         .setup(|app| {
             let handle = app.handle();
             app.manage(AppState {
-                http: translate::client(),
+                translator: translate::Translator::new(),
                 config: Mutex::new(config::load(handle)),
                 hotkey_error: Mutex::new(None),
                 clipboard: Mutex::new(None),

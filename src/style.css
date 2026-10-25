@@ -122,6 +122,26 @@ body.stale #output, body.stale #translit, body.stale #dict { opacity: .45; }
 .translit { margin-top: 3px; font-size: 13.5px; font-style: italic; color: var(--muted); }
 .translit:empty { display: none; }
 
+/* What was translated instead of the input: a typo fix or romaji in its own script. */
+.correction {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0 4px;
+  margin-top: 5px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.correction:empty { display: none; }
+.correction mark {
+  padding: 0 3px;
+  border-radius: 2px;
+  background: var(--marker);
+  color: var(--on-marker);
+  font-size: 14px;
+}
+.correction .undo { margin-left: auto; font-size: 12px; }
+
 #dict {
   display: grid;
   grid-template-columns: max-content 1fr;

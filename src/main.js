@@ -4,7 +4,7 @@ const $ = id => document.getElementById(id);
 const el = {
   from: $('from'), to: $('to'), swap: $('swap'), status: $('status'),
   picker: $('picker'), query: $('query'), matches: $('matches'),
-  input: $('input'), srcTranslit: $('src-translit'),
+  input: $('input'), srcTranslit: $('src-translit'), correction: $('correction'),
   output: $('output'), translit: $('translit'), dict: $('dict'), hints: $('hints'),
 };
 
@@ -15,7 +15,7 @@ const api = window.__TAURI__ ? tauriApi() : browserApi();
 function tauriApi() {
   const { invoke } = window.__TAURI__.core;
   return {
-    translate: (text, from, to) => invoke('translate', { text, from, to }),
+    translate: (text, from, to, { pair, asTyped }) => invoke('translate', { text, from, to, pair, asTyped }),
     copy: text => invoke('copy', { text }),
     paste: text => invoke('paste', { text }),
     hide: () => invoke('hide'),
@@ -25,24 +25,29 @@ function tauriApi() {
 }
 
 // Lets the UI run in a plain browser (serve src/) to iterate on it without rebuilding.
+// It skips the app's extras: input-method conversion and the rate-limit cooldown.
 function browserApi() {
   return {
     async translate(text, from, to) {
       const params = new URLSearchParams({ client: 'gtx', sl: from, tl: to, hl: 'en', dj: '1' });
-      ['t', 'bd', 'rm'].forEach(dt => params.append('dt', dt));
+      ['t', 'bd', 'rm', 'qca'].forEach(dt => params.append('dt', dt));
       const res = await fetch(`https://translate.googleapis.com/translate_a/single?${params}`, {
         method: 'POST',
         body: new URLSearchParams({ q: text }),
       });
-      if (!res.ok) throw `Translation failed: HTTP ${res.status}`;
+      if (!res.ok) throw { message: `Translation failed: HTTP ${res.status}` };
       const json = await res.json();
       const s = json.sentences ?? [];
+      const spell = json.spell?.spell_res;
       return {
         text: s.map(x => x.trans ?? '').join(''),
         detected: json.src || null,
         translit: s.find(x => x.translit)?.translit || null,
         src_translit: s.find(x => x.src_translit)?.src_translit || null,
         dict: (json.dict ?? []).map(d => ({ pos: d.pos ?? '', terms: d.terms ?? [] })),
+        correction: spell && spell !== text
+          ? { text: spell, kind: json.spell.correction_type?.includes(6) ? 'script' : 'spelling' }
+          : null,
       };
     },
     copy: text => navigator.clipboard.writeText(text),
@@ -87,16 +92,26 @@ let timer = 0;
 let pickedKey = null; // input + languages right after an explicit language pick
 let requestSeq = 0;   // order of translation requests…
 let shownSeq = 0;     // …and of the one on screen, so a slow reply never replaces a newer one
+let asTyped = false;  // Ctrl+O: skip spelling/script corrections
+let lastRequestAt = 0;
 
-const keyOf = () => `${store.from}\n${store.to}\n${el.input.value}`;
+// Spaces at the ends and runs of spaces don't change a translation, so they
+// shouldn't cost a request (every one counts against Google's rate limit).
+const requestText = () => el.input.value.replace(/[ \t]+/g, ' ').trim();
+const keyOf = () => `${store.from}\n${store.to}\n${asTyped}\n${requestText()}`;
+
+/** The user's languages, most relevant first: they hint at what romanized input is. */
+function languagePair() {
+  const langs = [store.from, store.to, ...store.recent.to, ...store.recent.from];
+  return [...new Set(langs)].filter(c => c !== 'auto').slice(0, 4);
+}
 
 /** Translates the current input right away (or reuses a cached/in-flight result). */
 function translateNow() {
   clearTimeout(timer);
-  typingSince = 0;
-  const text = el.input.value;
+  const text = requestText();
   const key = keyOf();
-  if (!text.trim()) {
+  if (!text) {
     shownSeq = ++requestSeq;
     show(null);
     return Promise.resolve(null);
@@ -110,7 +125,8 @@ function translateNow() {
 
   const seq = ++requestSeq;
   const langs = `${store.from}\n${store.to}\n`;
-  const promise = api.translate(text, store.from, store.to).then(
+  lastRequestAt = Date.now();
+  const promise = api.translate(text, store.from, store.to, { pair: languagePair(), asTyped }).then(
     result => {
       cache.set(key, result);
       if (cache.size > 300) cache.delete(cache.keys().next().value);
@@ -137,7 +153,7 @@ function translateNow() {
     },
     err => {
       if (pending?.key === key) pending = null; // let the next attempt retry
-      if (keyOf() === key) setStatus(String(err), 'error');
+      if (keyOf() === key) showError(err, key);
       throw err;
     },
   );
@@ -150,17 +166,39 @@ async function settled() {
   try { return await translateNow(); } catch { return null; }
 }
 
-// While the user keeps typing, still translate at least this often.
-const MAX_WAIT_MS = 600;
-let typingSince = 0;
+// While the user keeps typing, an in-between translation goes out at the end of
+// a word, at most this often. Pausing (config.debounce_ms) always translates.
+const IN_BETWEEN_MS = 1500;
 
 function scheduleTranslation() {
   clearTimeout(timer);
-  if (!el.input.value.trim()) return translateNow();
+  if (!requestText()) return translateNow();
   document.body.classList.add('stale');
-  typingSince ||= Date.now();
-  const delay = Math.min(config.debounce_ms, typingSince + MAX_WAIT_MS - Date.now());
-  timer = setTimeout(() => translateNow().catch(() => {}), Math.max(0, delay));
+  const wordEnded = /[\s.,!?;:、。，！？]$/.test(el.input.value);
+  const due = wordEnded && Date.now() - lastRequestAt >= IN_BETWEEN_MS;
+  timer = setTimeout(() => translateNow().catch(() => {}), due ? 0 : config.debounce_ms);
+}
+
+let retryTimer = 0;
+let countdown = 0;
+
+/** Shows a failed translation; while rate-limited, counts down and retries. */
+function showError(err, key) {
+  clearTimeout(retryTimer);
+  clearInterval(countdown);
+  const retryIn = err?.retry_in_ms;
+  if (!retryIn) return setStatus(err?.message ?? String(err), 'error');
+  const retryAt = Date.now() + retryIn;
+  const tick = () => {
+    setStatus(`Google rate limit, retrying in ${Math.max(1, Math.ceil((retryAt - Date.now()) / 1000))} s`, 'error');
+  };
+  tick();
+  countdown = setInterval(tick, 1000);
+  retryTimer = setTimeout(() => {
+    clearInterval(countdown);
+    setStatus('');
+    if (keyOf() === key) translateNow().catch(() => {});
+  }, retryIn + 50);
 }
 
 /** `stale`: the result is for an earlier version of the input. */
@@ -170,11 +208,39 @@ function show(result, { stale = false } = {}) {
   el.output.value = result?.text ?? '';
   el.translit.textContent = result?.translit ?? '';
   el.srcTranslit.textContent = result?.src_translit ?? '';
+  renderCorrection(result);
   renderDict(result?.dict ?? []);
   renderLangs();
   fit(el.output);
+  if (result) {
+    clearTimeout(retryTimer);
+    clearInterval(countdown);
+  }
   if (el.status.classList.contains('error') && !config.hotkey_error) setStatus('');
   setHints();
+}
+
+/** "Read as ありがとう", or "Corrected to läuft", with the key that undoes it. */
+function renderCorrection(result) {
+  el.correction.replaceChildren();
+  const correction = result?.correction;
+  if (!result || (!correction && !asTyped)) return;
+  const label = asTyped
+    ? (correction ? 'Translating as typed, not ' : 'Translating as typed')
+    : (correction.kind === 'script' ? 'Read as ' : 'Corrected to ');
+  el.correction.append(label);
+  if (correction) {
+    const mark = document.createElement('mark');
+    mark.textContent = correction.text;
+    mark.lang = htmlLang(result.detected ?? '');
+    el.correction.append(mark);
+  }
+  const undo = document.createElement('span');
+  undo.className = 'undo';
+  const kbd = document.createElement('kbd');
+  kbd.textContent = 'Ctrl+O';
+  undo.append(kbd, asTyped ? 'use corrections' : 'use what I typed');
+  el.correction.append(undo);
 }
 
 function renderDict(dict) {
@@ -441,6 +507,7 @@ el.input.addEventListener('input', () => {
   fit(el.input, 120);
   store.text = el.input.value;
   saveStore();
+  if (!requestText()) asTyped = false;
   scheduleTranslation();
 });
 
@@ -489,7 +556,10 @@ document.addEventListener('keydown', e => {
   else if (ctrl && k === 'f') openPicker('from', false);
   else if (ctrl && k === 't') openPicker('to', false);
   else if (ctrl && e.shiftKey && k === 'c') { e.preventDefault(); commit('keep', selectedOutput()); }
-  else if (ctrl && k === 'p') {
+  else if (ctrl && k === 'o') {
+    asTyped = !asTyped;
+    translateNow().catch(() => {});
+  } else if (ctrl && k === 'p') {
     if (e.shiftKey) speak(el.input.value, store.from === 'auto' ? current?.detected : store.from);
     else speak(el.output.value, store.to);
   } else if (e.altKey && !ctrl && /^Digit[1-9]$/.test(e.code)) {
@@ -553,6 +623,7 @@ document.addEventListener('mousedown', () => { touchedSinceSummon = true; }, tru
 /** `selection`: text that was selected in the app the hotkey was pressed in. */
 function onSummon(selection) {
   touchedSinceSummon = false;
+  asTyped = false;
   closePicker();
   if (selection) return useSelection(selection);
   if (config.start_in === 'source') return openPicker('from', true);

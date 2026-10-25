@@ -23,10 +23,14 @@ impl Default for Config {
             hotkey: "Ctrl+Shift+Space".into(),
             start_in: "input".into(),
             hide_on_blur: true,
-            debounce_ms: 200,
+            debounce_ms: 400,
         }
     }
 }
+
+/// v0.1.0's default: so short that normal typing rhythm sent a request almost
+/// every word. Files still holding it are moved to the new default.
+const OLD_DEFAULT_DEBOUNCE_MS: u64 = 200;
 
 pub fn path(app: &AppHandle) -> PathBuf {
     app.path()
@@ -39,10 +43,17 @@ pub fn path(app: &AppHandle) -> PathBuf {
 pub fn load(app: &AppHandle) -> Config {
     let path = path(app);
     match std::fs::read_to_string(&path) {
-        Ok(s) => serde_json::from_str(&s).unwrap_or_else(|e| {
-            eprintln!("Invalid {}: {e}; using defaults", path.display());
-            Config::default()
-        }),
+        Ok(s) => {
+            let mut config: Config = serde_json::from_str(&s).unwrap_or_else(|e| {
+                eprintln!("Invalid {}: {e}; using defaults", path.display());
+                Config::default()
+            });
+            if config.debounce_ms == OLD_DEFAULT_DEBOUNCE_MS {
+                config.debounce_ms = Config::default().debounce_ms;
+                let _ = std::fs::write(&path, serde_json::to_string_pretty(&config).unwrap());
+            }
+            config
+        }
         Err(_) => {
             let config = Config::default();
             if let Some(dir) = path.parent() {

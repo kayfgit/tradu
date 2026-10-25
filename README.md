@@ -49,6 +49,7 @@ The global hotkey is **Ctrl+Shift+Space**. You can change it in the config.
 | **Ctrl+F** / **Ctrl+T** | Pick only the source (*from*) or only the target (*to*) |
 | **Ctrl+P** / **Ctrl+Shift+P** | Listen to the translation / the input |
 | **Ctrl+Shift+C** | Copy translation, stay open |
+| **Ctrl+O** | Translate exactly what you typed, without corrections (press again to undo) |
 | **Tab** | Move into the translation to select part of it |
 | **Esc** | Close |
 
@@ -74,6 +75,25 @@ Select with **Shift+arrows**, then press **Enter** to copy the selection or **Ct
 - **Bidirectional pairs.** With the source on *Detect language*, typing in the target language flips the target to your previous language, falling back to your system language. If you set the target to Japanese, typing English gives Japanese and typing Japanese gives English. You rarely need to change languages.
 - Picking the language that's already on the other side swaps the two languages.
 
+### Typos and romanized input
+
+You don't have to type perfectly. A line under the input shows what was actually translated:
+
+- **Missing accents and typos** are fixed: `ich wurde gerne ein bier` is *corrected to* `ich würde gerne ein bier`, and "I would like a beer" comes out.
+- **Romaji** is written in Japanese first: `kore wa nan desu ka` is *read as* `これはなんですか`, and `arigatou` as `ありがとう`. Particles typed the way learners write them (*wa*, *o*, *e*) become は, を and へ.
+- **Pinyin** works the same way when the source is Chinese, and Google itself handles romanized Hindi, Russian and others (`privet kak dela` → `привет как дела`).
+
+Short romaji like `arigatou` often looks like another language to the detector. tradu treats it as Japanese when Japanese is one of your recent languages and the detected language isn't. If a correction is wrong (a name, slang), press **Ctrl+O** to translate exactly what you typed.
+
+### Rate limits
+
+Google's free endpoint limits how often one connection can ask. tradu keeps its request count low:
+
+- While you type, it translates when you pause (400 ms), plus at most one in-between update every 1.5 s at the end of a word.
+- Re-typing the same text, or adding spaces, uses the cached result.
+
+If Google does refuse, tradu stops asking for a while (30 s at first, doubling up to 5 minutes) instead of retrying on every keystroke, which would keep the block going. The header shows a countdown, and the translation retries by itself when it ends.
+
 ### How the selection is read
 
 The hotkey asks the app to copy its selection with **Ctrl+Insert**, the standard Windows copy shortcut, then reads the clipboard. It doesn't use Ctrl+C, because in a terminal Ctrl+C interrupts the running program when nothing is selected.
@@ -93,12 +113,13 @@ Open it from the tray with **Edit config**, then use **Reload config** to apply 
   "hotkey": "Ctrl+Shift+Space",
   "start_in": "input",
   "hide_on_blur": true,
-  "debounce_ms": 200
+  "debounce_ms": 400
 }
 ```
 
 - `start_in`: `"input"` (default) opens straight into the text box with your last languages. `"source"` opens in the source picker, then the target picker, then the input.
 - `hotkey`: modifiers `Ctrl`, `Shift`, `Alt` and `Super`, plus a key such as `Space`, `T`, `F9` or `Backquote`.
+- `debounce_ms`: how long a pause in typing triggers a translation. Lower feels snappier but sends more requests, so you hit Google's rate limit sooner.
 
 The tray menu also has **Start at login**.
 
@@ -138,7 +159,7 @@ To iterate on the UI without rebuilding, serve `src/` (for example `python -m ht
 
 **Why not a GPU-native toolkit (egui, iced)?** A translator has to render *every* script correctly: Arabic and Hebrew right-to-left, Devanagari and Thai shaping, CJK glyph variants. It also needs working IME input for Japanese, Chinese and Korean. The system web engine gets all of that right for free, and the lighter toolkits still don't.
 
-Translations come from Google Translate's keyless public endpoint. It's free and fast, but unofficial, so heavy use can get you rate-limited.
+Translations come from Google Translate's keyless public endpoint, and romaji/pinyin conversion from Google's input-method service. Both are free and fast but unofficial, so heavy use can get you rate-limited (see [Rate limits](#rate-limits)).
 
 ## License
 
