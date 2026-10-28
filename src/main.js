@@ -23,6 +23,7 @@ function tauriApi() {
     config: () => invoke('ui_config'),
     setDeepl: key => invoke('set_deepl', { key }),
     setProvider: provider => invoke('set_provider', { provider }),
+    setOcrLanguage: lang => invoke('set_ocr_language', { lang }),
     limits: () => invoke('limits'),
     speak: (text, lang) => invoke('speak', { text, lang }),
     moveWindow: (dx, dy) => invoke('move_window', { dx, dy }),
@@ -65,6 +66,7 @@ function browserApi() {
     config: async () => ({ start_in: 'input', debounce_ms: 400, hotkey: '', hotkey_error: null, deepl: false }),
     setDeepl: async () => { throw 'DeepL needs the app, not the browser preview'; },
     setProvider: async () => { throw 'switching needs the app, not the browser preview'; },
+    setOcrLanguage: async () => { throw 'painting needs the app, not the browser preview'; },
     speak: async () => { throw { message: 'the preview has no Google voice' }; },
     moveWindow: async () => {},
     resizeWindow: async () => {},
@@ -76,7 +78,10 @@ function browserApi() {
 
 // ---------------------------------------------------------------- state
 
-let config = { start_in: 'input', debounce_ms: 400, hotkey: '', hotkey_error: null, deepl: false, provider: 'auto' };
+let config = {
+  start_in: 'input', debounce_ms: 400, hotkey: '', hotkey_error: null, deepl: false, provider: 'auto',
+  paint_hotkey: '', ocr_language: '',
+};
 
 const HISTORY_MAX = 50;
 
@@ -432,12 +437,18 @@ const HELP = [
   [':deepl KEY', 'use your DeepL key while Google is limiting'],
   [':use auto', 'or :use google, :use deepl: who translates'],
   [':move :resize', 'place the popup with hjkl (⇧ fine, ^ big), reset to undo'],
+  [':ocr de', 'read painted text as German'],
+  ['Painting'],
+  [() => config.paint_hotkey || 'paint_hotkey', 'freeze the screen, paint over text to translate it'],
+  ['⇧ wheel', 'hold Shift to paint several strokes, wheel or [ ] for brush size'],
+  ['enter esc', 'read what is painted, cancel; right-click undoes a stroke'],
 ];
 
 function showHelp() {
   const div = document.createElement('div');
   div.className = 'help';
-  for (const [key, text] of HELP) {
+  for (const [entry, text] of HELP) {
+    const key = typeof entry === 'function' ? entry() : entry;
     if (!text) {
       div.append(Object.assign(document.createElement('span'), { className: 'head', textContent: key }));
       continue;
@@ -484,6 +495,7 @@ function parseCommand(line) {
   if (words.length === 1 && ['help', 'h', '?'].includes(first)) return { label: 'list keys and commands', run: showHelp };
   if (first === 'deepl') return deeplCommand(line.trim().split(/\s+/).slice(1));
   if (first === 'use') return useCommand(words[1]);
+  if (first === 'ocr') return ocrCommand(words[1]);
   if (first === 'move' || first === 'resize') return placementCommand(first, words[1]);
   if (words.length > 2) return { error: 'give one language (target) or two (source and target)' };
   const langs = words.map((w, i) => resolveLang(w, words.length === 2 && i === 0 ? 'from' : 'to'));
@@ -558,6 +570,29 @@ async function setProvider(provider) {
     setStatus(`translating with ${PROVIDERS[provider]}`, 'done');
     translateNow().catch(() => {});
     refreshLimits();
+  } catch (err) {
+    setStatus(String(err?.message ?? err), 'error');
+  }
+}
+
+/** `:ocr de` sets the language painted text is read as; `:ocr auto` leaves it to Windows. */
+function ocrCommand(word) {
+  const current = config.ocr_language ? nameOf(config.ocr_language) : 'your Windows languages';
+  if (!word) return { label: `painted text is read as ${current} · :ocr de to change` };
+  if (word === 'auto' || word === 'off') {
+    return { label: 'read painted text in your Windows languages', run: () => saveOcrLanguage('') };
+  }
+  const lang = resolveLang(word, 'to');
+  if (!lang) return { error: `no language matches "${word}"` };
+  return { label: `read painted text as ${nameOf(lang)}`, run: () => saveOcrLanguage(lang) };
+}
+
+async function saveOcrLanguage(lang) {
+  try {
+    const note = await api.setOcrLanguage(lang);
+    config.ocr_language = lang;
+    setStatus(note?.replace(lang, nameOf(lang))
+      ?? `painted text is read as ${lang ? nameOf(lang) : 'your Windows languages'}`, 'done');
   } catch (err) {
     setStatus(String(err?.message ?? err), 'error');
   }
@@ -1136,5 +1171,7 @@ async function loadConfig() {
   // The app took longer than the popup to copy its selection.
   api.on('selection', e => touchedSinceSummon || useSelection(e.payload));
   api.on('config-changed', loadConfig);
+  // Something went wrong while painting over text.
+  api.on('notice', e => setStatus(e.payload.text, e.payload.kind));
   onSummon();
 })();

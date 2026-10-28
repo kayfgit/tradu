@@ -4529,7 +4529,7 @@ dependencies = [
 
 [[package]]
 name = "tradu"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "arboard",
  "reqwest 0.12.28",
@@ -4541,6 +4541,7 @@ dependencies = [
  "tauri-plugin-global-shortcut",
  "tauri-plugin-single-instance",
  "tokio",
+ "windows",
  "windows-sys 0.59.0",
 ]
 

@@ -2,10 +2,15 @@
 
 mod config;
 mod deepl;
+#[cfg(windows)]
+mod ocr;
 mod origin;
+#[cfg(windows)]
+mod paint;
 mod romaji;
 mod translate;
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -17,12 +22,14 @@ use tauri::{
     AppHandle, Emitter, LogicalSize, Manager, PhysicalPosition, State, WebviewWindow, WindowEvent,
 };
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
-use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 struct AppState {
     translator: translate::Translator,
     config: Mutex<Config>,
     hotkey_error: Mutex<Option<String>>,
+    /// The paint hotkey as registered, to tell it apart from the main one.
+    paint_shortcut: Mutex<Option<Shortcut>>,
     // Kept alive for the whole session: on Linux the clipboard empties when its owner drops.
     clipboard: Mutex<Option<arboard::Clipboard>>,
     previous_window: Mutex<origin::Target>,
@@ -37,6 +44,8 @@ const SELECTION_LATE: Duration = Duration::from_millis(300);
 struct UiConfig {
     hotkey: String,
     hotkey_error: Option<String>,
+    paint_hotkey: String,
+    ocr_language: String,
     start_in: String,
     debounce_ms: u64,
     /// Whether a DeepL key is set up.
@@ -78,6 +87,8 @@ fn ui_config(state: State<'_, AppState>) -> UiConfig {
     UiConfig {
         hotkey: config.hotkey.clone(),
         hotkey_error: state.hotkey_error.lock().unwrap().clone(),
+        paint_hotkey: config.paint_hotkey.clone(),
+        ocr_language: config.ocr_language.clone(),
         start_in: config.start_in.clone(),
         debounce_ms: config.debounce_ms,
         deepl: !config.deepl_key.is_empty(),
@@ -133,6 +144,37 @@ async fn set_deepl(
     state.translator.set_deepl(config.deepl());
     *state.config.lock().unwrap() = config;
     Ok(usage)
+}
+
+/// `:ocr de`: the language painted text is read as; empty for Windows' choice.
+/// When Windows has no recognizer of its own for it, the command that installs
+/// one goes on the clipboard, and the reply says whether another stands in meanwhile.
+#[tauri::command]
+fn set_ocr_language(app: AppHandle, state: State<'_, AppState>, lang: String) -> Result<Option<String>, String> {
+    #[allow(unused_mut)]
+    let mut note = None;
+    #[cfg(windows)]
+    match ocr::engine(&lang) {
+        Ok(engine) if !engine.exact => {
+            set_clipboard(&state, ocr::install_command(&lang))?;
+            note = Some(format!(
+                "reading {lang} with a related recognizer · for its own, the install command is copied (admin PowerShell)"
+            ));
+        }
+        Ok(_) => {}
+        Err(ocr::EngineError::NotInstalled(lang)) => {
+            set_clipboard(&state, ocr::install_command(&lang))?;
+            return Err(format!(
+                "Windows can't read {lang} text yet · install command copied, run it in an admin PowerShell"
+            ));
+        }
+        Err(ocr::EngineError::Other(message)) => return Err(message),
+    }
+    let mut config = state.config.lock().unwrap().clone();
+    config.ocr_language = lang;
+    config::save(&app, &config).map_err(|e| format!("Couldn't save the config: {e}"))?;
+    *state.config.lock().unwrap() = config;
+    Ok(note)
 }
 
 #[tauri::command]
@@ -211,6 +253,68 @@ fn summon_from_hotkey(app: &AppHandle) {
     });
 }
 
+#[derive(Serialize, Clone)]
+struct Notice {
+    text: String,
+    kind: &'static str,
+}
+
+/// Paint hotkey handler: freeze the screen, let the user brush over text, read
+/// it and open the popup with it, as if it had been selected.
+#[cfg(windows)]
+fn paint_from_hotkey(app: &AppHandle) {
+    static PAINTING: AtomicBool = AtomicBool::new(false);
+    if PAINTING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let popup_open = app.get_webview_window("main").is_some_and(|w| w.is_visible().unwrap_or(false));
+    if popup_open {
+        hide_popup(app);
+    }
+    let app = app.clone();
+    // Its own thread: the overlay runs a message loop until the user is done.
+    std::thread::spawn(move || {
+        let state = app.state::<AppState>();
+        let previous = if popup_open {
+            // The popup must be gone from the screen before it's captured.
+            std::thread::sleep(Duration::from_millis(150));
+            *state.previous_window.lock().unwrap()
+        } else {
+            origin::foreground()
+        };
+        let lang = state.config.lock().unwrap().ocr_language.clone();
+        let outcome = match ocr::engine(&lang) {
+            Err(ocr::EngineError::NotInstalled(lang)) => {
+                Err(format!("Windows can't read {lang} text yet · :ocr {lang} copies the install command"))
+            }
+            Err(ocr::EngineError::Other(message)) => Err(message),
+            Ok(engine) => match paint::run() {
+                None => Ok(None),
+                Some(painted) => match ocr::read(&engine, &painted) {
+                    Ok(text) if text.trim().is_empty() => Err("no text found where you painted".into()),
+                    Ok(text) => Ok(Some(text)),
+                    Err(e) => Err(format!("Text recognition failed: {}", e.message())),
+                },
+            },
+        };
+        PAINTING.store(false, Ordering::SeqCst);
+        match outcome {
+            Ok(None) => {} // cancelled
+            Ok(Some(text)) => show_for(&app, Some(text), previous),
+            Err(text) => {
+                show_for(&app, None, previous);
+                let _ = app.emit("notice", Notice { text, kind: "error" });
+            }
+        }
+    });
+}
+
+#[cfg(not(windows))]
+fn paint_from_hotkey(app: &AppHandle) {
+    show(app, None);
+    let _ = app.emit("notice", Notice { text: "painting over text needs Windows for now".into(), kind: "error" });
+}
+
 /// Reads the selection the app just copied and puts the user's clipboard back.
 fn take_selection(state: &AppState, previous: Option<String>) -> Option<String> {
     let selection = with_clipboard(state, |c| c.get_text())
@@ -230,9 +334,14 @@ fn hide_popup(app: &AppHandle) {
 
 /// Shows the popup on the monitor under the mouse, optionally prefilled.
 fn show(app: &AppHandle, selection: Option<String>) {
+    show_for(app, selection, origin::foreground());
+}
+
+/// `show`, pasting back into `previous` later.
+fn show_for(app: &AppHandle, selection: Option<String>, previous: origin::Target) {
     let Some(window) = app.get_webview_window("main") else { return };
     let state = app.state::<AppState>();
-    *state.previous_window.lock().unwrap() = origin::foreground();
+    *state.previous_window.lock().unwrap() = previous;
 
     place_on_cursor_monitor(&window);
     let _ = window.show();
@@ -336,16 +445,31 @@ fn reset_placement(
 
 fn register_hotkey(app: &AppHandle) {
     let state = app.state::<AppState>();
-    let hotkey = state.config.lock().unwrap().hotkey.clone();
+    let (hotkey, paint_hotkey) = {
+        let config = state.config.lock().unwrap();
+        (config.hotkey.clone(), config.paint_hotkey.trim().to_owned())
+    };
     let shortcuts = app.global_shortcut();
     let _ = shortcuts.unregister_all();
-    let error = shortcuts
-        .register(hotkey.as_str())
-        .err()
-        .map(|e| format!("Couldn't register hotkey \"{hotkey}\": {e}"));
+    let mut errors = Vec::new();
+    if let Err(e) = shortcuts.register(hotkey.as_str()) {
+        errors.push(format!("Couldn't register hotkey \"{hotkey}\": {e}"));
+    }
+    let mut paint = None;
+    if !paint_hotkey.is_empty() {
+        match paint_hotkey.parse::<Shortcut>() {
+            Ok(shortcut) => match shortcuts.register(shortcut) {
+                Ok(()) => paint = Some(shortcut),
+                Err(e) => errors.push(format!("Couldn't register paint hotkey \"{paint_hotkey}\": {e}")),
+            },
+            Err(e) => errors.push(format!("Couldn't read paint hotkey \"{paint_hotkey}\": {e}")),
+        }
+    }
+    let error = (!errors.is_empty()).then(|| errors.join(" · "));
     if let Some(e) = &error {
         eprintln!("{e}");
     }
+    *state.paint_shortcut.lock().unwrap() = paint;
     *state.hotkey_error.lock().unwrap() = error;
 }
 
@@ -362,6 +486,7 @@ fn reload_config(app: &AppHandle) {
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let autostart_on = app.autolaunch().is_enabled().unwrap_or(false);
     let show = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
+    let paint = MenuItem::with_id(app, "paint", "Paint text on screen", true, None::<&str>)?;
     let autostart =
         CheckMenuItem::with_id(app, "autostart", "Start at login", true, autostart_on, None::<&str>)?;
     let edit = MenuItem::with_id(app, "edit", "Edit config", true, None::<&str>)?;
@@ -371,6 +496,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         app,
         &[
             &show,
+            &paint,
             &autostart,
             &PredefinedMenuItem::separator(app)?,
             &edit,
@@ -388,6 +514,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         .show_menu_on_left_click(false)
         .on_menu_event(move |app, event| match event.id().as_ref() {
             "show" => toggle(app),
+            "paint" => paint_from_hotkey(app),
             "autostart" => {
                 let launcher = app.autolaunch();
                 let _ = if launcher.is_enabled().unwrap_or(false) {
@@ -423,8 +550,14 @@ fn main() {
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, None))
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
-                .with_handler(|app, _, event| {
-                    if event.state() == ShortcutState::Pressed {
+                .with_handler(|app, shortcut, event| {
+                    if event.state() != ShortcutState::Pressed {
+                        return;
+                    }
+                    let paint = *app.state::<AppState>().paint_shortcut.lock().unwrap();
+                    if paint.as_ref() == Some(shortcut) {
+                        paint_from_hotkey(app);
+                    } else {
                         summon_from_hotkey(app);
                     }
                 })
@@ -440,6 +573,7 @@ fn main() {
                 translator,
                 config: Mutex::new(config),
                 hotkey_error: Mutex::new(None),
+                paint_shortcut: Mutex::new(None),
                 clipboard: Mutex::new(None),
                 previous_window: Mutex::new(0),
             });
@@ -476,6 +610,7 @@ fn main() {
             ui_config,
             set_deepl,
             set_provider,
+            set_ocr_language,
             limits,
             speak,
             move_window,

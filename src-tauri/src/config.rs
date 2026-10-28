@@ -11,6 +11,12 @@ use crate::translate::Mode;
 pub struct Config {
     /// Global shortcut that toggles the popup, e.g. "Ctrl+Shift+Space" or "Alt+T".
     pub hotkey: String,
+    /// Global shortcut that freezes the screen to paint over text and translate
+    /// it, for text that can't be selected (games, images). Empty: off.
+    pub paint_hotkey: String,
+    /// The language painted text is read as, e.g. "de". Empty: Windows' own
+    /// language list decides. Set with `:ocr`.
+    pub ocr_language: String,
     /// Where focus lands when the popup opens: "input" (keep last languages) or
     /// "source" (pick source language, then target, then type).
     pub start_in: String,
@@ -38,6 +44,8 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             hotkey: "Ctrl+Shift+Space".into(),
+            paint_hotkey: "Alt+Shift+Space".into(),
+            ocr_language: String::new(),
             start_in: "input".into(),
             hide_on_blur: true,
             debounce_ms: 400,
@@ -123,5 +131,18 @@ pub fn open_in_editor(app: &AppHandle) {
     let cmd = std::process::Command::new("xdg-open").arg(&path).spawn();
     if let Err(e) = cmd {
         eprintln!("Couldn't open {}: {e}", path.display());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use tauri_plugin_global_shortcut::Shortcut;
+
+    #[test]
+    fn default_hotkeys_parse() {
+        let config = super::Config::default();
+        let main: Shortcut = config.hotkey.parse().unwrap();
+        let paint: Shortcut = config.paint_hotkey.parse().unwrap();
+        assert_ne!(main, paint);
     }
 }

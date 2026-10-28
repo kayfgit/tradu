@@ -2,7 +2,7 @@
 
 A popup translator for people who live on the keyboard. Press a hotkey from anywhere, type, press Enter, and the translation is on your clipboard and the popup is gone. You never need the mouse.
 
-If text is selected when you press the hotkey, it's already in the popup and being translated.
+If text is selected when you press the hotkey, it's already in the popup and being translated. For text you can't select, like in a game or an image, press **Alt+Shift+Space** and paint over it.
 
 ![tradu: a friend's Portuguese sushi invite is selected and translated with the hotkey, an English reply is pasted back in Portuguese, the chef's line typed in romaji is read as Japanese, and an answer goes out in Japanese with :ja](docs/demo.gif)
 
@@ -24,6 +24,7 @@ To uninstall, use **Settings › Apps**, or run `& "$env:LOCALAPPDATA\tradu\unin
 
 - **Instant:** it stays resident in the tray, and the popup takes focus about 30 ms after the hotkey.
 - **Live:** it translates as you type, and Enter always copies the result for exactly what's on screen.
+- **Reads the screen:** paint over text in a game, a video or an image, and tradu reads it with the OCR built into Windows, offline.
 - **Learner-friendly:** it shows romanization (`家` → *Ie*), dictionary alternatives for single words, and pronunciation.
 - **Terminal-like:** a history of earlier translations you can step through with ↑, and a `:` command line for switching languages.
 - **Light:** a 4 MB binary using about 80 MB of memory in total (the Rust process plus a trimmed WebView2).
@@ -35,6 +36,7 @@ The global hotkey is **Ctrl+Shift+Space**. You can change it in the config.
 
 - **Nothing selected:** the popup opens with an empty line and your last languages, ready to type.
 - **Text selected** in any app: the popup opens with that text in it and translates it straight away, with the source set to auto-detect (the selection could be in any language). Press Enter to copy the translation, or Ctrl+Enter to paste it over the selection (in an editable field).
+- **Text you can't select** (games, videos, images): press **Alt+Shift+Space** and paint over it. See [Painting over text](#painting-over-text).
 
 ### Typing
 
@@ -77,6 +79,7 @@ Type **:** on an empty line, then press **Enter** to run the command. A preview 
 | `:use google` / `:use deepl` | Always that one |
 | `:move` / `:resize` | Place the popup with **h j k l** (40 px; **Shift** 8 px, **Ctrl** 200 px), **Esc** or **Enter** when done. It opens there from then on. |
 | `:move reset` / `:resize reset` | Back to centered / the default size |
+| `:ocr de` | Read painted text as German (`:ocr auto` leaves it to your Windows languages) |
 | `:help` | List the keys and commands |
 
 Languages match fuzzily, like in the picker: `:german english` and `:deu eng` work too.
@@ -142,6 +145,24 @@ Your clipboard is put back afterwards if it held text. If it held an image or fi
 - **VS Code** copies the whole current line when nothing is selected, so the hotkey grabs that line. Set `"editor.emptySelectionClipboard": false` to stop it.
 - Apps that don't support Ctrl+Insert (rare: some games and custom-drawn UIs) just open the popup normally.
 
+### Painting over text
+
+For text that can't be selected, such as a game set to the language you're learning, press **Alt+Shift+Space**. The screen under the mouse freezes and dims, and the cursor turns into a brush. Paint over the words you want and let go: tradu reads them and the popup opens with them, just like a selection. If a letter was misread, fix it in the input like a typo.
+
+| Key | Action |
+| --- | --- |
+| *drag* | Paint. Only the words you brush over are read, even across lines |
+| **Shift** while letting go | Keep painting, for several strokes; **Enter** reads them |
+| **Right-click** / **Backspace** / **Ctrl+Z** | Undo the last stroke (with none left, cancel) |
+| **Mouse wheel** / **[ ]** | Brush size |
+| **Esc** | Cancel |
+
+The text is read by the OCR built into Windows, on your PC: nothing is uploaded, and there's nothing extra to download. Tell tradu which language you paint with `:ocr` (say `:ocr de`); otherwise Windows uses your own languages.
+
+- **Latin-alphabet languages work right away.** Windows' recognizers for one Latin language read the others well, umlauts and accents included, so English reads German, French or Spanish. When the language's own recognizer is missing, `:ocr` says so and copies the command that installs it to your clipboard, if you'd like the extra accuracy. Run it in PowerShell as admin.
+- **Other scripts need their recognizer:** Russian, Greek, Arabic, Japanese, Chinese, Korean and so on. `:ocr ja` copies the install command when it's missing. Recognizers can also be added under **Settings › Time & language › Language & region**, as part of a language.
+- **Games:** borderless or windowed mode works. In exclusive fullscreen, any window that appears on top makes the game minimize, so switch to borderless. tradu only takes a screenshot and draws its own window, like the Snipping Tool; it doesn't touch the game or send it any keys.
+
 ## Config
 
 Open it from the tray with **Edit config**, then use **Reload config** to apply your changes. The file is at `%APPDATA%\com.tradu.translator\config.json`.
@@ -149,6 +170,8 @@ Open it from the tray with **Edit config**, then use **Reload config** to apply 
 ```json
 {
   "hotkey": "Ctrl+Shift+Space",
+  "paint_hotkey": "Alt+Shift+Space",
+  "ocr_language": "",
   "start_in": "input",
   "hide_on_blur": true,
   "debounce_ms": 400,
@@ -159,6 +182,8 @@ Open it from the tray with **Edit config**, then use **Reload config** to apply 
 
 - `start_in`: `"input"` (default) opens straight into the text box with your last languages. `"source"` opens in the source picker, then the target picker, then the input.
 - `hotkey`: modifiers `Ctrl`, `Shift`, `Alt` and `Super`, plus a key such as `Space`, `T`, `F9` or `Backquote`.
+- `paint_hotkey`: the same, for [painting over text](#painting-over-text). Leave it empty (`""`) to turn painting off.
+- `ocr_language`: the language painted text is read as, such as `"de"`. Empty: Windows' choice from your languages. Set it with `:ocr`.
 - `debounce_ms`: how long a pause in typing triggers a translation. Lower feels snappier but sends more requests, so you hit Google's rate limit sooner.
 - `provider`: `"auto"` (default) uses Google's free endpoint, and DeepL while Google is limiting if a key is set. `"google"` or `"deepl"` uses only that one. Set it with `:use`.
 - `deepl_key`: your DeepL API key, normally set with `:deepl` (see [DeepL fallback](#deepl-fallback-optional)).
@@ -196,7 +221,7 @@ To iterate on the UI without rebuilding, serve `src/` (for example `python -m ht
 
 ## How it's built
 
-- **Tauri 2 / Rust backend** (`src-tauri/src`): global hotkey, tray, single instance, clipboard, and translation requests. `origin.rs` handles the app you came from: reading its selection and pasting back into it. The HTTP connection is warmed up when the popup opens, so the first translation doesn't pay for a TLS handshake.
+- **Tauri 2 / Rust backend** (`src-tauri/src`): global hotkey, tray, single instance, clipboard, and translation requests. `origin.rs` handles the app you came from: reading its selection and pasting back into it. `paint.rs` freezes the screen (Desktop Duplication, so borderless games are captured too) and draws the brush overlay with plain Win32 instead of a second web view; `ocr.rs` reads the painted words with `Windows.Media.Ocr`. The HTTP connection is warmed up when the popup opens, so the first translation doesn't pay for a TLS handshake.
 - **Frontend** (`src/`): plain HTML, CSS and JS with no framework or bundler. All the keyboard logic is in `main.js`. It's set in JetBrains Mono when that's installed, falling back to Cascadia Mono, then Consolas, so no font is bundled.
 - WebView2 runs with software rendering, and the network service runs inside the main process. For a small text UI this halves memory, from about 160 MB to about 80 MB.
 
