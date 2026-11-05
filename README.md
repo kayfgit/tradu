@@ -66,7 +66,7 @@ Every translation you copy, paste or close the popup on is kept above the input,
 
 ### Commands
 
-Type **:** on an empty line, then press **Enter** to run the command. A preview of what it will do shows as you type.
+Type **:** to open the command line, then press **Enter** to run the command. A preview of what it will do shows as you type. Whatever was in the input comes back afterwards, translated with the new languages if the command changed them (`:ja` after typing a word translates it into Japanese). To type a colon into the text itself, paste it.
 
 | Command | Does |
 | --- | --- |
@@ -77,10 +77,10 @@ Type **:** on an empty line, then press **Enter** to run the command. A preview 
 | `:deepl KEY` | Use your DeepL API key while Google is limiting (`:deepl off` removes it) |
 | `:use auto` | Google, and DeepL while Google is limiting (the default) |
 | `:use google` / `:use deepl` | Always that one |
-| `:move` / `:resize` | Place the popup with **h j k l** (40 px; **Shift** 8 px, **Ctrl** 200 px), **Esc** or **Enter** when done. It opens there from then on. |
+| `:move` / `:resize` | Place the popup with **h j k l** (40 px; **Shift** 8 px, **Ctrl** 200 px), **Esc** or **Enter** when done. It opens there from then on. Dragging any empty space moves it too, and dragging its edges resizes it. |
 | `:move reset` / `:resize reset` | Back to centered / the default size |
 | `:ocr de` | Read painted text as German (`:ocr auto` leaves it to your Windows languages) |
-| `:help` | List the keys and commands |
+| `:help` | List the keys and commands: **j k** scroll, **g G** jump to the top or bottom, **Esc** goes back |
 
 Languages match fuzzily, like in the picker: `:german english` and `:deu eng` work too.
 
@@ -161,7 +161,7 @@ The text is read by the OCR built into Windows, on your PC: nothing is uploaded,
 
 - **Latin-alphabet languages work right away.** Windows' recognizers for one Latin language read the others well, umlauts and accents included, so English reads German, French or Spanish. When the language's own recognizer is missing, `:ocr` says so and copies the command that installs it to your clipboard, if you'd like the extra accuracy. Run it in PowerShell as admin.
 - **Other scripts need their recognizer:** Russian, Greek, Arabic, Japanese, Chinese, Korean and so on. `:ocr ja` copies the install command when it's missing. Recognizers can also be added under **Settings › Time & language › Language & region**, as part of a language.
-- **Games:** borderless or windowed mode works. In exclusive fullscreen, any window that appears on top makes the game minimize, so switch to borderless. tradu only takes a screenshot and draws its own window, like the Snipping Tool; it doesn't touch the game or send it any keys.
+- **Games:** borderless or windowed mode works. In exclusive fullscreen, any window that appears on top makes the game minimize, so switch to borderless. tradu only takes a screenshot and draws its own window, like the Snipping Tool; it doesn't touch the game. Some games, League of Legends among them, keep Windows from delivering hotkeys while they're in front (Print Screen stops working too), so tradu also watches for its hotkeys with a keyboard hook, the way Discord's push-to-talk does.
 
 ## Config
 
@@ -187,7 +187,7 @@ Open it from the tray with **Edit config**, then use **Reload config** to apply 
 - `debounce_ms`: how long a pause in typing triggers a translation. Lower feels snappier but sends more requests, so you hit Google's rate limit sooner.
 - `provider`: `"auto"` (default) uses Google's free endpoint, and DeepL while Google is limiting if a key is set. `"google"` or `"deepl"` uses only that one. Set it with `:use`.
 - `deepl_key`: your DeepL API key, normally set with `:deepl` (see [DeepL fallback](#deepl-fallback-optional)).
-- `window_position`, `window_size`: where the popup opens (from the top-left of the monitor under the mouse) and how big it is, in pixels. Set with `:move` and `:resize`; leave them out for centered and 760×480.
+- `window_position`, `window_size`: where the popup opens (from the top-left of the monitor under the mouse) and how big it is, in pixels. Set with `:move` and `:resize`, or by dragging the popup or its edges; leave them out for centered and 760×480.
 
 The tray menu also has **Start at login**.
 
@@ -202,6 +202,8 @@ cargo test -- --include-ignored   # includes one live network test
 ```
 
 For the installer, run `cargo install tauri-cli --version "^2" --locked` once, then `cargo tauri build`. The installer is written to `target/release/bundle/nsis/`. It installs for the current user only, so it doesn't need admin rights.
+
+To try changes before releasing them, `.\install-local.ps1` builds the installer, installs it where the one-line installer puts releases (your config and history are kept), and restarts tradu.
 
 ### Releasing
 
@@ -221,7 +223,7 @@ To iterate on the UI without rebuilding, serve `src/` (for example `python -m ht
 
 ## How it's built
 
-- **Tauri 2 / Rust backend** (`src-tauri/src`): global hotkey, tray, single instance, clipboard, and translation requests. `origin.rs` handles the app you came from: reading its selection and pasting back into it. `paint.rs` freezes the screen (Desktop Duplication, so borderless games are captured too) and draws the brush overlay with plain Win32 instead of a second web view; `ocr.rs` reads the painted words with `Windows.Media.Ocr`. The HTTP connection is warmed up when the popup opens, so the first translation doesn't pay for a TLS handshake.
+- **Tauri 2 / Rust backend** (`src-tauri/src`): global hotkey (plus a keyboard hook in `hook.rs` for games that block hotkeys), tray, single instance, clipboard, and translation requests. `origin.rs` handles the app you came from: reading its selection and pasting back into it. `paint.rs` freezes the screen (Desktop Duplication, so borderless games are captured too) and draws the brush overlay with plain Win32 instead of a second web view; `ocr.rs` reads the painted words with `Windows.Media.Ocr`. The HTTP connection is warmed up when the popup opens, so the first translation doesn't pay for a TLS handshake.
 - **Frontend** (`src/`): plain HTML, CSS and JS with no framework or bundler. All the keyboard logic is in `main.js`. It's set in JetBrains Mono when that's installed, falling back to Cascadia Mono, then Consolas, so no font is bundled.
 - WebView2 runs with software rendering, and the network service runs inside the main process. For a small text UI this halves memory, from about 160 MB to about 80 MB.
 

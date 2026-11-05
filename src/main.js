@@ -30,6 +30,7 @@ function tauriApi() {
     resizeWindow: (dw, dh) => invoke('resize_window', { dw, dh }),
     savePlacement: what => invoke('save_placement', { what }),
     resetPlacement: what => invoke('reset_placement', { what }),
+    startDragging: () => window.__TAURI__.window.getCurrentWindow().startDragging(),
     on: (event, fn) => window.__TAURI__.event.listen(event, fn),
   };
 }
@@ -72,6 +73,7 @@ function browserApi() {
     resizeWindow: async () => {},
     savePlacement: async () => {},
     resetPlacement: async () => {},
+    startDragging: async () => {},
     on: () => {},
   };
 }
@@ -356,7 +358,11 @@ function archive(action) {
 }
 
 function renderHistory() {
-  helpShown = false;
+  if (helpShown) {
+    helpShown = false;
+    document.body.classList.remove('help');
+    focusInput();
+  }
   const entries = store.history;
   if (!entries.length) {
     const empty = document.createElement('p');
@@ -438,6 +444,7 @@ const HELP = [
   [':use auto', 'or :use google, :use deepl: who translates'],
   [':move :resize', 'place the popup with hjkl (⇧ fine, ^ big), reset to undo'],
   [':ocr de', 'read painted text as German'],
+  ['drag', 'move the popup by any empty space, resize it by its edges'],
   ['Painting'],
   [() => config.paint_hotkey || 'paint_hotkey', 'freeze the screen, paint over text to translate it'],
   ['⇧ wheel', 'hold Shift to paint several strokes, wheel or [ ] for brush size'],
@@ -456,16 +463,40 @@ function showHelp() {
     div.append(Object.assign(document.createElement('b'), { textContent: key }), Object.assign(document.createElement('span'), { textContent: text }));
   }
   el.history.replaceChildren(div);
-  el.history.scrollTop = el.history.scrollHeight;
+  el.history.scrollTop = 0;
   helpShown = true;
+  document.body.classList.add('help');
+  setHints();
 }
+
+// :help is a page of its own, like flagra's: j k (or the arrows) scroll it,
+// g G jump to either end, Esc, Enter or q go back, and : opens the command line.
+// The input is hidden meanwhile, and whatever was in it comes back with it.
+document.addEventListener('keydown', e => {
+  if (!helpShown || commandMode || picking || windowMode || e.ctrlKey || e.altKey || e.metaKey) return;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  const page = el.history.clientHeight - 60;
+  const scroll = {
+    j: 60, ArrowDown: 60, k: -60, ArrowUp: -60, PageDown: page, PageUp: -page,
+    g: -Infinity, Home: -Infinity, G: Infinity, End: Infinity,
+  }[e.key];
+  if (['Escape', 'Enter', 'q', ':'].includes(e.key)) {
+    renderHistory();
+    if (e.key === ':') enterCommand();
+  } else if (scroll == null) return;
+  else if (!isFinite(scroll)) el.history.scrollTop = scroll > 0 ? el.history.scrollHeight : 0;
+  else el.history.scrollBy({ top: scroll });
+}, true);
 
 // ---------------------------------------------------------------- commands
 
 let commandMode = false;
+let beforeCommand = ''; // what was in the input when : was pressed, back afterwards
 
 function enterCommand() {
   commandMode = true;
+  beforeCommand = el.input.value;
   document.body.classList.add('command');
   el.input.value = '';
   previewCommand();
@@ -473,12 +504,15 @@ function enterCommand() {
   setHints();
 }
 
-function exitCommand() {
+/** `translate`: show the restored input's translation (from the cache, usually). */
+function exitCommand({ translate = true } = {}) {
   commandMode = false;
   document.body.classList.remove('command');
-  el.input.value = '';
+  el.input.value = beforeCommand;
+  beforeCommand = '';
   fit(el.input, 124);
   show(null);
+  if (translate) translateNow().catch(() => {});
 }
 
 const resolveLang = (word, which) => findMatches(which, word)[0]?.[0] ?? null;
@@ -638,9 +672,11 @@ function previewCommand() {
 function runCommand() {
   const cmd = parseCommand(el.input.value);
   if (!cmd.run) return;
-  exitCommand();
+  // Translated after the command, which may change the languages: one request, not two.
+  exitCommand({ translate: false });
   cmd.run();
   if (cmd.run !== showHelp) renderHistory();
+  translateNow().catch(() => {});
 }
 
 // ---------------------------------------------------------------- languages
@@ -934,7 +970,7 @@ el.input.addEventListener('keydown', e => {
     else if (e.key === 'Escape' || (e.key === 'Backspace' && !el.input.value)) { e.preventDefault(); exitCommand(); }
     return;
   }
-  if (e.key === ':' && !el.input.value) {
+  if (e.key === ':') {
     e.preventDefault();
     enterCommand();
   } else if (e.key === 'Enter' && !e.shiftKey && !e.altKey) {
@@ -997,17 +1033,26 @@ document.addEventListener('keydown', e => {
   }
 });
 
+// Dragging any empty space moves the popup (its edges resize it, natively).
+// The input keeps the focus, so typing carries on after a drag.
+document.addEventListener('mousedown', e => {
+  if (e.button !== 0 || e.target.closest('textarea, input, button, #picker')) return;
+  e.preventDefault();
+  api.startDragging().catch(() => {});
+});
+
 document.addEventListener('contextmenu', e => {
   if (!e.target.matches('textarea, input')) e.preventDefault();
 });
 
-// Closing by clicking away (the app hides on blur) files the translation too,
-// and nothing is retried while the popup is out of sight.
-window.addEventListener('blur', () => {
+// Closing by clicking away (the app hides then) files the translation too, and
+// nothing is retried while the popup is out of sight. The app tells, not the
+// window's blur: dragging the popup blurs the page without leaving it.
+function onLeft() {
   if (windowMode) exitWindowMode();
   stopRetrying();
   archive(null);
-});
+}
 
 // ---------------------------------------------------------------- chrome
 
@@ -1018,6 +1063,7 @@ const HINTS = {
   output: [['⇧ ←→', 'select', 1], ['⏎', 'copy', 0], ['^⏎', 'paste', 2], ['tab', 'back', 3]],
   picker: [['↑↓', 'move', 1], ['⏎', 'pick', 0], ['1-9', 'quick pick', 3], ['esc', 'keep', 2], ['⇧tab', 'back', 4]],
   command: [['⏎', 'run', 0], ['esc', 'cancel', 1]],
+  help: [['j k', 'scroll', 0], ['g G', 'top / bottom', 2], ['esc', 'back', 1]],
   move: [['hjkl', 'move', 0], ['⇧', 'fine', 2], ['^', 'big', 3], ['esc', 'done', 1]],
   resize: [['hjkl', 'resize', 0], ['⇧', 'fine', 2], ['^', 'big', 3], ['esc', 'done', 1]],
 };
@@ -1028,6 +1074,7 @@ const INFO_MIN_PX = 120;
 function setHints() {
   const which = windowMode ?? (picking ? 'picker'
     : commandMode ? 'command'
+    : helpShown ? 'help'
     : document.activeElement === el.output ? 'output'
     : dictTerms.length ? 'dict' : 'input');
   let hints = HINTS[which];
@@ -1171,6 +1218,7 @@ async function loadConfig() {
   // The app took longer than the popup to copy its selection.
   api.on('selection', e => touchedSinceSummon || useSelection(e.payload));
   api.on('config-changed', loadConfig);
+  api.on('left', onLeft);
   // Something went wrong while painting over text.
   api.on('notice', e => setStatus(e.payload.text, e.payload.kind));
   onSummon();
