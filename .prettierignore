@@ -1,0 +1,9 @@
+# Prettier formats the frontend's JS and the tooling's own config.
+# CSS, HTML and Markdown keep their hand-written layout; Rust has rustfmt.
+*.css
+*.html
+*.md
+src-tauri/
+brag-output/
+docs/
+package-lock.json

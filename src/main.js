@@ -1,12 +1,23 @@
-'use strict';
+import { byCode, canon, findMatches as rankLanguages, nameOf } from './langs.js';
 
+/** @param {string} id */
 const $ = id => document.getElementById(id);
+/** @param {string} id */
+const $text = id => /** @type {HTMLTextAreaElement} */ (document.getElementById(id));
 const el = {
   history: $('history'),
-  prompt: $('prompt'), input: $('input'),
-  mark: $('mark'), output: $('output'), meta: $('meta'),
-  pair: $('pair'), info: $('info'), hints: $('hints'), limits: $('limits'),
-  picker: $('picker'), query: $('query'), matches: $('matches'),
+  prompt: $('prompt'),
+  input: $text('input'),
+  mark: $('mark'),
+  output: $text('output'),
+  meta: $('meta'),
+  pair: $('pair'),
+  info: $('info'),
+  hints: $('hints'),
+  limits: $('limits'),
+  picker: $('picker'),
+  query: /** @type {HTMLInputElement} */ ($('query')),
+  matches: $('matches'),
 };
 
 // ---------------------------------------------------------------- backend
@@ -56,19 +67,28 @@ function browserApi() {
         translit: s.find(x => x.translit)?.translit || null,
         src_translit: s.find(x => x.src_translit)?.src_translit || null,
         dict: (json.dict ?? []).map(d => ({ pos: d.pos ?? '', terms: d.terms ?? [], base: d.base_form || null })),
-        correction: spell && spell !== text
-          ? { text: spell, kind: json.spell.correction_type?.includes(6) ? 'script' : 'spelling' }
-          : null,
+        correction:
+          spell && spell !== text
+            ? { text: spell, kind: json.spell.correction_type?.includes(6) ? 'script' : 'spelling' }
+            : null,
       };
     },
     copy: text => navigator.clipboard.writeText(text),
     paste: text => navigator.clipboard.writeText(text),
     hide: async () => {},
     config: async () => ({ start_in: 'input', debounce_ms: 400, hotkey: '', hotkey_error: null, deepl: false }),
-    setDeepl: async () => { throw 'DeepL needs the app, not the browser preview'; },
-    setProvider: async () => { throw 'switching needs the app, not the browser preview'; },
-    setOcrLanguage: async () => { throw 'painting needs the app, not the browser preview'; },
-    speak: async () => { throw { message: 'the preview has no Google voice' }; },
+    setDeepl: async () => {
+      throw 'DeepL needs the app, not the browser preview';
+    },
+    setProvider: async () => {
+      throw 'switching needs the app, not the browser preview';
+    },
+    setOcrLanguage: async () => {
+      throw 'painting needs the app, not the browser preview';
+    },
+    speak: async () => {
+      throw { message: 'the preview has no Google voice' };
+    },
     moveWindow: async () => {},
     resizeWindow: async () => {},
     savePlacement: async () => {},
@@ -81,33 +101,40 @@ function browserApi() {
 // ---------------------------------------------------------------- state
 
 let config = {
-  start_in: 'input', debounce_ms: 400, hotkey: '', hotkey_error: null, deepl: false, provider: 'auto',
-  paint_hotkey: '', ocr_language: '',
+  start_in: 'input',
+  debounce_ms: 400,
+  hotkey: '',
+  hotkey_error: null,
+  deepl: false,
+  provider: 'auto',
+  paint_hotkey: '',
+  ocr_language: '',
 };
 
 const HISTORY_MAX = 50;
 
-const store = Object.assign(
-  { from: 'auto', to: 'en', recent: { from: [], to: [] }, history: [] },
-  readStore(),
-);
+const store = Object.assign({ from: 'auto', to: 'en', recent: { from: [], to: [] }, history: [] }, readStore());
 
 function readStore() {
-  try { return JSON.parse(localStorage.getItem('tradu')) ?? {}; } catch { return {}; }
+  try {
+    return JSON.parse(localStorage.getItem('tradu')) ?? {};
+  } catch {
+    return {};
+  }
 }
 function saveStore() {
-  try { localStorage.setItem('tradu', JSON.stringify(store)); } catch {}
+  try {
+    localStorage.setItem('tradu', JSON.stringify(store));
+  } catch {
+    /* storage unavailable: settings last until closed */
+  }
 }
 
-const AUTO = ['auto', 'Detect language', ''];
-const byCode = new Map(LANGS.map(l => [l[0], l]));
-const canon = code => ALIASES[code] ?? code;
-const nameOf = code => (code === 'auto' ? 'Detect language' : byCode.get(canon(code))?.[1] ?? code);
 // Google's legacy codes aren't valid BCP 47; the lang attribute picks CJK glyph variants.
 const htmlLang = code => ({ iw: 'he', jw: 'jv', auto: '' })[code] ?? code;
 
-let current = null;      // last result shown
-let dictTerms = [];      // alternatives in Alt+1..9 order
+let current = null; // last result shown
+let dictTerms = []; // alternatives in Alt+1..9 order
 
 // ---------------------------------------------------------------- translation
 
@@ -115,9 +142,9 @@ const cache = new Map();
 let pending = null;
 let timer = 0;
 let pickedKey = null; // input + languages right after an explicit language pick
-let requestSeq = 0;   // order of translation requests…
-let shownSeq = 0;     // …and of the one on screen, so a slow reply never replaces a newer one
-let asTyped = false;  // Ctrl+O: skip spelling/script corrections
+let requestSeq = 0; // order of translation requests…
+let shownSeq = 0; // …and of the one on screen, so a slow reply never replaces a newer one
+let asTyped = false; // Ctrl+O: skip spelling/script corrections
 let lastRequestAt = 0;
 
 // Spaces at the ends and runs of spaces don't change a translation, so they
@@ -165,8 +192,8 @@ function translateNow() {
       }
       // Typed in the target language: flip to the other side of the user's pair
       // (but not for the text that was on screen when they picked the target).
-      const flip = store.from === 'auto' && key !== pickedKey
-        && canon(result.detected ?? '') === store.to && alternateTarget();
+      const flip =
+        store.from === 'auto' && key !== pickedKey && canon(result.detected ?? '') === store.to && alternateTarget();
       if (flip) {
         store.to = flip;
         saveStore();
@@ -193,7 +220,11 @@ function remember(key, result) {
 
 /** The translation of exactly what's on screen, waiting for it if needed. */
 async function settled() {
-  try { return await translateNow(); } catch { return null; }
+  try {
+    return await translateNow();
+  } catch {
+    return null;
+  }
 }
 
 // While the user keeps typing, an in-between translation goes out at the end of
@@ -279,12 +310,19 @@ function renderMeta(result) {
   const correction = result.correction;
   if (correction || asTyped) {
     const label = asTyped
-      ? (correction ? 'as typed, not' : 'as typed')
-      : (correction.kind === 'script' ? 'read as' : 'corrected to');
+      ? correction
+        ? 'as typed, not'
+        : 'as typed'
+      : correction.kind === 'script'
+        ? 'read as'
+        : 'corrected to';
     const row = line(span(label));
     if (correction) row.append(span(correction.text, 'value', htmlLang(result.detected ?? '')));
     const key = span('', 'key');
-    key.append(Object.assign(document.createElement('b'), { textContent: '^O' }), asTyped ? ' use corrections' : ' as typed');
+    key.append(
+      Object.assign(document.createElement('b'), { textContent: '^O' }),
+      asTyped ? ' use corrections' : ' as typed',
+    );
     row.append(key);
   }
 
@@ -298,7 +336,9 @@ function renderMeta(result) {
   if (entry && dictTerms.length) {
     const input = requestText();
     const base = entry.base && entry.base.toLowerCase() !== input.toLowerCase() ? `, from ${entry.base}` : '';
-    parts.push(labeled(`${entry.pos || 'also'}${base}`, span(dictTerms.join(' · '), 'value-quiet', htmlLang(store.to))));
+    parts.push(
+      labeled(`${entry.pos || 'also'}${base}`, span(dictTerms.join(' · '), 'value-quiet', htmlLang(store.to))),
+    );
   }
   if (parts.length) line(...parts);
 
@@ -332,7 +372,7 @@ function alternatives(result) {
 
 // ---------------------------------------------------------------- history
 
-let recall = 0;   // 0: the line being typed; n: the nth newest history entry
+let recall = 0; // 0: the line being typed; n: the nth newest history entry
 let draft = '';
 let helpShown = false;
 
@@ -367,29 +407,37 @@ function renderHistory() {
   if (!entries.length) {
     const empty = document.createElement('p');
     empty.className = 'empty';
-    empty.textContent = 'Type to translate. Earlier translations show up here: ↑ brings them back, :help lists everything else.';
+    empty.textContent =
+      'Type to translate. Earlier translations show up here: ↑ brings them back, :help lists everything else.';
     el.history.replaceChildren(empty);
     renderInfo();
     return;
   }
-  el.history.replaceChildren(...entries.map((entry, i) => {
-    const n = entries.length - i;
-    const div = document.createElement('div');
-    div.className = n === recall ? 'entry recalled' : 'entry';
-    const lang = htmlLang(entry.result.detected ?? entry.from);
-    const num = Object.assign(document.createElement('span'), { className: 'n', textContent: `[${n}]` });
-    const src = Object.assign(document.createElement('span'), { className: 'src', textContent: `› ${entry.text}`, lang });
-    const dst = document.createElement('div');
-    dst.className = 'dst';
-    dst.lang = htmlLang(entry.to);
-    const words = [entry.result.text, ...alternatives(entry.result).slice(0, 2)].join(' · ');
-    dst.append(Object.assign(document.createElement('span'), { textContent: words }));
-    if (entry.action) dst.append(Object.assign(document.createElement('span'), { className: 'badge', textContent: entry.action }));
-    div.append(num, src, dst);
-    const info = grammar(entry.result, entry.text) || entry.result.translit;
-    if (info) div.append(Object.assign(document.createElement('span'), { className: 'info', textContent: info }));
-    return div;
-  }));
+  el.history.replaceChildren(
+    ...entries.map((entry, i) => {
+      const n = entries.length - i;
+      const div = document.createElement('div');
+      div.className = n === recall ? 'entry recalled' : 'entry';
+      const lang = htmlLang(entry.result.detected ?? entry.from);
+      const num = Object.assign(document.createElement('span'), { className: 'n', textContent: `[${n}]` });
+      const src = Object.assign(document.createElement('span'), {
+        className: 'src',
+        textContent: `› ${entry.text}`,
+        lang,
+      });
+      const dst = document.createElement('div');
+      dst.className = 'dst';
+      dst.lang = htmlLang(entry.to);
+      const words = [entry.result.text, ...alternatives(entry.result).slice(0, 2)].join(' · ');
+      dst.append(Object.assign(document.createElement('span'), { textContent: words }));
+      if (entry.action)
+        dst.append(Object.assign(document.createElement('span'), { className: 'badge', textContent: entry.action }));
+      div.append(num, src, dst);
+      const info = grammar(entry.result, entry.text) || entry.result.translit;
+      if (info) div.append(Object.assign(document.createElement('span'), { className: 'info', textContent: info }));
+      return div;
+    }),
+  );
   el.history.scrollTop = el.history.scrollHeight;
   renderInfo();
 }
@@ -460,7 +508,10 @@ function showHelp() {
       div.append(Object.assign(document.createElement('span'), { className: 'head', textContent: key }));
       continue;
     }
-    div.append(Object.assign(document.createElement('b'), { textContent: key }), Object.assign(document.createElement('span'), { textContent: text }));
+    div.append(
+      Object.assign(document.createElement('b'), { textContent: key }),
+      Object.assign(document.createElement('span'), { textContent: text }),
+    );
   }
   el.history.replaceChildren(div);
   el.history.scrollTop = 0;
@@ -472,22 +523,34 @@ function showHelp() {
 // :help is a page of its own, like flagra's: j k (or the arrows) scroll it,
 // g G jump to either end, Esc, Enter or q go back, and : opens the command line.
 // The input is hidden meanwhile, and whatever was in it comes back with it.
-document.addEventListener('keydown', e => {
-  if (!helpShown || commandMode || picking || windowMode || e.ctrlKey || e.altKey || e.metaKey) return;
-  e.preventDefault();
-  e.stopImmediatePropagation();
-  const page = el.history.clientHeight - 60;
-  const scroll = {
-    j: 60, ArrowDown: 60, k: -60, ArrowUp: -60, PageDown: page, PageUp: -page,
-    g: -Infinity, Home: -Infinity, G: Infinity, End: Infinity,
-  }[e.key];
-  if (['Escape', 'Enter', 'q', ':'].includes(e.key)) {
-    renderHistory();
-    if (e.key === ':') enterCommand();
-  } else if (scroll == null) return;
-  else if (!isFinite(scroll)) el.history.scrollTop = scroll > 0 ? el.history.scrollHeight : 0;
-  else el.history.scrollBy({ top: scroll });
-}, true);
+document.addEventListener(
+  'keydown',
+  e => {
+    if (!helpShown || commandMode || picking || windowMode || e.ctrlKey || e.altKey || e.metaKey) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    const page = el.history.clientHeight - 60;
+    const scroll = {
+      j: 60,
+      ArrowDown: 60,
+      k: -60,
+      ArrowUp: -60,
+      PageDown: page,
+      PageUp: -page,
+      g: -Infinity,
+      Home: -Infinity,
+      G: Infinity,
+      End: Infinity,
+    }[e.key];
+    if (['Escape', 'Enter', 'q', ':'].includes(e.key)) {
+      renderHistory();
+      if (e.key === ':') enterCommand();
+    } else if (scroll == null) return;
+    else if (!isFinite(scroll)) el.history.scrollTop = scroll > 0 ? el.history.scrollHeight : 0;
+    else el.history.scrollBy({ top: scroll });
+  },
+  true,
+);
 
 // ---------------------------------------------------------------- commands
 
@@ -519,14 +582,19 @@ const resolveLang = (word, which) => findMatches(which, word)[0]?.[0] ?? null;
 
 /** Reads a command line into { label, run } or { error }. */
 function parseCommand(line) {
-  const words = line.trim().toLowerCase().split(/[\s>→,]+/).filter(Boolean);
+  const words = line
+    .trim()
+    .toLowerCase()
+    .split(/[\s>→,]+/)
+    .filter(Boolean);
   if (!words.length) return { label: 'a language (ja), two languages (de en), swap, clear or help' };
   const [first] = words;
   if (words.length === 1 && (first === 'swap' || first === 's')) return { label: 'swap languages', run: swap };
   if (words.length === 1 && first === 'clear') {
     return { label: `clear history (${store.history.length})`, run: clearHistory };
   }
-  if (words.length === 1 && ['help', 'h', '?'].includes(first)) return { label: 'list keys and commands', run: showHelp };
+  if (words.length === 1 && ['help', 'h', '?'].includes(first))
+    return { label: 'list keys and commands', run: showHelp };
   if (first === 'deepl') return deeplCommand(line.trim().split(/\s+/).slice(1));
   if (first === 'use') return useCommand(words[1]);
   if (first === 'ocr') return ocrCommand(words[1]);
@@ -569,19 +637,24 @@ function exitWindowMode() {
   windowMode = null;
   renderPair();
   setHints();
-  api.savePlacement(mode === 'move' ? 'position' : 'size')
+  api
+    .savePlacement(mode === 'move' ? 'position' : 'size')
     .catch(err => setStatus(String(err?.message ?? err), 'error'));
 }
 
-document.addEventListener('keydown', e => {
-  if (!windowMode) return;
-  e.preventDefault();
-  e.stopImmediatePropagation();
-  const step = e.ctrlKey ? WINDOW_STEP.big : e.shiftKey ? WINDOW_STEP.fine : WINDOW_STEP.normal;
-  const delta = { KeyH: [-step, 0], KeyL: [step, 0], KeyJ: [0, step], KeyK: [0, -step] }[e.code];
-  if (delta) (windowMode === 'move' ? api.moveWindow : api.resizeWindow)(...delta);
-  else if (e.key === 'Escape' || e.key === 'Enter') exitWindowMode();
-}, true);
+document.addEventListener(
+  'keydown',
+  e => {
+    if (!windowMode) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    const step = e.ctrlKey ? WINDOW_STEP.big : e.shiftKey ? WINDOW_STEP.fine : WINDOW_STEP.normal;
+    const delta = { KeyH: [-step, 0], KeyL: [step, 0], KeyJ: [0, step], KeyK: [0, -step] }[e.code];
+    if (delta) (windowMode === 'move' ? api.moveWindow : api.resizeWindow)(...delta);
+    else if (e.key === 'Escape' || e.key === 'Enter') exitWindowMode();
+  },
+  true,
+);
 
 const PROVIDERS = {
   auto: 'Google, and DeepL while Google is limiting',
@@ -625,8 +698,10 @@ async function saveOcrLanguage(lang) {
   try {
     const note = await api.setOcrLanguage(lang);
     config.ocr_language = lang;
-    setStatus(note?.replace(lang, nameOf(lang))
-      ?? `painted text is read as ${lang ? nameOf(lang) : 'your Windows languages'}`, 'done');
+    setStatus(
+      note?.replace(lang, nameOf(lang)) ?? `painted text is read as ${lang ? nameOf(lang) : 'your Windows languages'}`,
+      'done',
+    );
   } catch (err) {
     setStatus(String(err?.message ?? err), 'error');
   }
@@ -771,47 +846,7 @@ function choose(code) {
   else focusInput();
 }
 
-const normalize = s => s.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
-
-function score([code, name, native], q) {
-  const n = normalize(name);
-  const nat = normalize(native);
-  const c = code.toLowerCase();
-  if (c === q || canon(q) === code) return 100;
-  if (n.startsWith(q)) return 80;
-  if (nat.startsWith(q)) return 75;
-  if (n.split(/[^a-z]+/).some(w => w.startsWith(q))) return 60;
-  if (c.startsWith(q)) return 50;
-  if (n.includes(q) || nat.includes(q)) return 40;
-  let i = 0;
-  for (const ch of n) if (ch === q[i]) i++;
-  return i === q.length ? 10 : 0;
-}
-
-function findMatches(which, query) {
-  const pool = which === 'from' ? [AUTO, ...LANGS] : LANGS;
-  const recent = store.recent[which];
-  const q = normalize(query.trim());
-  if (!q) {
-    // Quick-pick list: recents first, topped up with popular languages.
-    const head = which === 'from' ? [...recent, 'auto'] : recent;
-    return [...new Set([...head, ...POPULAR])]
-      .map(c => (c === 'auto' ? AUTO : byCode.get(c)))
-      .filter(Boolean)
-      .slice(0, 9);
-  }
-  const bonus = code => {
-    const r = recent.indexOf(code);
-    const p = POPULAR.indexOf(code);
-    return (r >= 0 ? 6 - r * 0.1 : 0) + (p >= 0 ? 3 - p * 0.05 : 0);
-  };
-  return pool
-    .map(lang => ({ lang, s: score(lang, q) }))
-    .filter(m => m.s > 0)
-    .sort((a, b) => b.s + bonus(b.lang[0]) - (a.s + bonus(a.lang[0])))
-    .slice(0, 8)
-    .map(m => m.lang);
-}
+const findMatches = (which, query) => rankLanguages(which, query, store.recent[which]);
 
 function renderMatches() {
   const quick = !el.query.value.trim();
@@ -825,8 +860,11 @@ function renderMatches() {
       li.children[1].textContent = code;
       li.children[2].textContent = name;
       li.children[3].textContent = native !== name ? native : '';
-      li.children[3].lang = htmlLang(code);
-      li.addEventListener('mousedown', e => { e.preventDefault(); choose(code); });
+      /** @type {HTMLElement} */ (li.children[3]).lang = htmlLang(code);
+      li.addEventListener('mousedown', e => {
+        e.preventDefault();
+        choose(code);
+      });
       return li;
     }),
   );
@@ -928,8 +966,9 @@ async function speak(text, lang) {
 function speakLocally(text, lang) {
   const want = htmlLang(lang).toLowerCase();
   const voices = speechSynthesis.getVoices();
-  const voice = voices.find(v => v.lang.toLowerCase() === want)
-    ?? voices.find(v => v.lang.toLowerCase().split('-')[0] === want.split('-')[0]);
+  const voice =
+    voices.find(v => v.lang.toLowerCase() === want) ??
+    voices.find(v => v.lang.toLowerCase().split('-')[0] === want.split('-')[0]);
   if (!voice) return false;
   const utterance = new SpeechSynthesisUtterance(text);
   utterance.voice = voice;
@@ -966,8 +1005,13 @@ const onLastLine = () => !el.input.value.slice(el.input.selectionEnd).includes('
 el.input.addEventListener('keydown', e => {
   if (e.isComposing || e.keyCode === 229) return; // IME is still composing
   if (commandMode) {
-    if (e.key === 'Enter') { e.preventDefault(); runCommand(); }
-    else if (e.key === 'Escape' || (e.key === 'Backspace' && !el.input.value)) { e.preventDefault(); exitCommand(); }
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      runCommand();
+    } else if (e.key === 'Escape' || (e.key === 'Backspace' && !el.input.value)) {
+      e.preventDefault();
+      exitCommand();
+    }
     return;
   }
   if (e.key === ':') {
@@ -1015,12 +1059,18 @@ document.addEventListener('keydown', e => {
   }
   if (picking) return;
 
-  if (ctrl && !e.shiftKey && k === 's') { e.preventDefault(); swap(); }
-  else if (ctrl && k === 'l') { e.preventDefault(); openPicker('from', true); }
-  else if (ctrl && k === 'f') openPicker('from', false);
+  if (ctrl && !e.shiftKey && k === 's') {
+    e.preventDefault();
+    swap();
+  } else if (ctrl && k === 'l') {
+    e.preventDefault();
+    openPicker('from', true);
+  } else if (ctrl && k === 'f') openPicker('from', false);
   else if (ctrl && k === 't') openPicker('to', false);
-  else if (ctrl && e.shiftKey && k === 'c') { e.preventDefault(); commit('keep', selectedOutput()); }
-  else if (ctrl && k === 'o') {
+  else if (ctrl && e.shiftKey && k === 'c') {
+    e.preventDefault();
+    commit('keep', selectedOutput());
+  } else if (ctrl && k === 'o') {
     asTyped = !asTyped;
     translateNow().catch(() => {});
   } else if (ctrl && k === 'p') {
@@ -1036,13 +1086,13 @@ document.addEventListener('keydown', e => {
 // Dragging any empty space moves the popup (its edges resize it, natively).
 // The input keeps the focus, so typing carries on after a drag.
 document.addEventListener('mousedown', e => {
-  if (e.button !== 0 || e.target.closest('textarea, input, button, #picker')) return;
+  if (e.button !== 0 || /** @type {Element} */ (e.target).closest('textarea, input, button, #picker')) return;
   e.preventDefault();
   api.startDragging().catch(() => {});
 });
 
 document.addEventListener('contextmenu', e => {
-  if (!e.target.matches('textarea, input')) e.preventDefault();
+  if (!(/** @type {Element} */ (e.target).matches('textarea, input'))) e.preventDefault();
 });
 
 // Closing by clicking away (the app hides then) files the translation too, and
@@ -1058,31 +1108,85 @@ function onLeft() {
 
 // [key, label, rank]: when the bar is too narrow, the highest ranks go first.
 const HINTS = {
-  input: [['↑', 'recall', 3], ['⏎', 'copy', 0], ['^⏎', 'paste', 2], ['^S', 'swap', 4], [':', 'command', 1]],
-  dict: [['⏎', 'copy', 0], ['alt 1-N', 'alternative', 3], ['^⏎', 'paste', 2], ['^S', 'swap', 4], [':', 'command', 1]],
-  output: [['⇧ ←→', 'select', 1], ['⏎', 'copy', 0], ['^⏎', 'paste', 2], ['tab', 'back', 3]],
-  picker: [['↑↓', 'move', 1], ['⏎', 'pick', 0], ['1-9', 'quick pick', 3], ['esc', 'keep', 2], ['⇧tab', 'back', 4]],
-  command: [['⏎', 'run', 0], ['esc', 'cancel', 1]],
-  help: [['j k', 'scroll', 0], ['g G', 'top / bottom', 2], ['esc', 'back', 1]],
-  move: [['hjkl', 'move', 0], ['⇧', 'fine', 2], ['^', 'big', 3], ['esc', 'done', 1]],
-  resize: [['hjkl', 'resize', 0], ['⇧', 'fine', 2], ['^', 'big', 3], ['esc', 'done', 1]],
+  input: [
+    ['↑', 'recall', 3],
+    ['⏎', 'copy', 0],
+    ['^⏎', 'paste', 2],
+    ['^S', 'swap', 4],
+    [':', 'command', 1],
+  ],
+  dict: [
+    ['⏎', 'copy', 0],
+    ['alt 1-N', 'alternative', 3],
+    ['^⏎', 'paste', 2],
+    ['^S', 'swap', 4],
+    [':', 'command', 1],
+  ],
+  output: [
+    ['⇧ ←→', 'select', 1],
+    ['⏎', 'copy', 0],
+    ['^⏎', 'paste', 2],
+    ['tab', 'back', 3],
+  ],
+  picker: [
+    ['↑↓', 'move', 1],
+    ['⏎', 'pick', 0],
+    ['1-9', 'quick pick', 3],
+    ['esc', 'keep', 2],
+    ['⇧tab', 'back', 4],
+  ],
+  command: [
+    ['⏎', 'run', 0],
+    ['esc', 'cancel', 1],
+  ],
+  help: [
+    ['j k', 'scroll', 0],
+    ['g G', 'top / bottom', 2],
+    ['esc', 'back', 1],
+  ],
+  move: [
+    ['hjkl', 'move', 0],
+    ['⇧', 'fine', 2],
+    ['^', 'big', 3],
+    ['esc', 'done', 1],
+  ],
+  resize: [
+    ['hjkl', 'resize', 0],
+    ['⇧', 'fine', 2],
+    ['^', 'big', 3],
+    ['esc', 'done', 1],
+  ],
 };
 
 // The status text keeps at least this much of the bar before hints give way.
 const INFO_MIN_PX = 120;
 
 function setHints() {
-  const which = windowMode ?? (picking ? 'picker'
-    : commandMode ? 'command'
-    : helpShown ? 'help'
-    : document.activeElement === el.output ? 'output'
-    : dictTerms.length ? 'dict' : 'input');
+  const which =
+    windowMode ??
+    (picking
+      ? 'picker'
+      : commandMode
+        ? 'command'
+        : helpShown
+          ? 'help'
+          : document.activeElement === el.output
+            ? 'output'
+            : dictTerms.length
+              ? 'dict'
+              : 'input');
   let hints = HINTS[which];
-  const render = () => el.hints.replaceChildren(...hints.map(([key, label]) => {
-    const span = document.createElement('span');
-    span.append(Object.assign(document.createElement('b'), { textContent: key.replace('N', dictTerms.length) }), label);
-    return span;
-  }));
+  const render = () =>
+    el.hints.replaceChildren(
+      ...hints.map(([key, label]) => {
+        const span = document.createElement('span');
+        span.append(
+          Object.assign(document.createElement('b'), { textContent: key.replace('N', dictTerms.length) }),
+          label,
+        );
+        return span;
+      }),
+    );
   render();
   const room = () => el.hints.parentElement.clientWidth - el.pair.offsetWidth - INFO_MIN_PX;
   while (hints.length > 1 && el.hints.offsetWidth > room()) {
@@ -1151,12 +1255,14 @@ function renderLimits() {
   if (usage?.limit && config.provider !== 'google') {
     parts.push(['deepl', `${compact(usage.used)} / ${compact(usage.limit)}`, usage.used >= usage.limit ? 'error' : '']);
   }
-  el.limits.replaceChildren(...parts.map(([label, value, kind]) => {
-    const span = document.createElement('span');
-    if (kind) span.className = kind;
-    span.append(label, ' ', Object.assign(document.createElement('b'), { textContent: value }));
-    return span;
-  }));
+  el.limits.replaceChildren(
+    ...parts.map(([label, value, kind]) => {
+      const span = document.createElement('span');
+      if (kind) span.className = kind;
+      span.append(label, ' ', Object.assign(document.createElement('b'), { textContent: value }));
+      return span;
+    }),
+  );
 }
 
 function focusInput() {
@@ -1170,8 +1276,20 @@ function fit(textarea, max = Infinity) {
 }
 
 let touchedSinceSummon = false;
-document.addEventListener('keydown', () => { touchedSinceSummon = true; }, true);
-document.addEventListener('mousedown', () => { touchedSinceSummon = true; }, true);
+document.addEventListener(
+  'keydown',
+  () => {
+    touchedSinceSummon = true;
+  },
+  true,
+);
+document.addEventListener(
+  'mousedown',
+  () => {
+    touchedSinceSummon = true;
+  },
+  true,
+);
 
 /** `selection`: text that was selected in the app the hotkey was pressed in. */
 function onSummon(selection) {
