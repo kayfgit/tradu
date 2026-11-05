@@ -1,0 +1,21 @@
+{
+  "name": "tradu-ui",
+  "private": true,
+  "type": "module",
+  "description": "Dev tooling for tradu's frontend (src/). Building tradu doesn't need Node.",
+  "scripts": {
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "eslint .",
+    "typecheck": "tsc",
+    "test": "node --test",
+    "check": "npm run format:check && npm run lint && npm run typecheck && npm test"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "eslint": "10.14.0",
+    "globals": "17.14.0",
+    "prettier": "3.9.10",
+    "typescript": "7.0.2"
+  }
+}

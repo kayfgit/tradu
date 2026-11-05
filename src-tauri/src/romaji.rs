@@ -5,9 +5,8 @@ const VOWELS: &[u8] = b"aeiou";
 
 /// Consonant onsets of a romaji syllable, longest first.
 const ONSETS: &[&str] = &[
-    "ky", "gy", "sh", "sy", "ch", "cy", "ty", "dy", "ny", "hy", "by", "py", "my", "ry", "jy",
-    "ts", "dz", "k", "g", "s", "z", "t", "d", "n", "h", "b", "p", "m", "y", "r", "w", "j", "f",
-    "v",
+    "ky", "gy", "sh", "sy", "ch", "cy", "ty", "dy", "ny", "hy", "by", "py", "my", "ry", "jy", "ts", "dz", "k", "g",
+    "s", "z", "t", "d", "n", "h", "b", "p", "m", "y", "r", "w", "j", "f", "v",
 ];
 
 /// Whether every word of `text` reads as Japanese romaji ("arigatou",
@@ -17,10 +16,8 @@ pub fn looks_like_romaji(text: &str) -> bool {
     if !text.is_ascii() {
         return false;
     }
-    let mut words = text
-        .split(|c: char| !(c.is_ascii_alphabetic() || c == '\'' || c == '-'))
-        .filter(|w| !w.is_empty())
-        .peekable();
+    let mut words =
+        text.split(|c: char| !(c.is_ascii_alphabetic() || c == '\'' || c == '-')).filter(|w| !w.is_empty()).peekable();
     words.peek().is_some() && words.all(|w| is_romaji_word(&w.to_ascii_lowercase()))
 }
 
@@ -40,9 +37,9 @@ fn is_romaji_word(word: &str) -> bool {
         } else if rest.starts_with(b"tch") {
             i += 1; // matcha
         } else {
-            let onset = ONSETS.iter().find(|o| {
-                rest.starts_with(o.as_bytes()) && rest.get(o.len()).is_some_and(|c| VOWELS.contains(c))
-            });
+            let onset = ONSETS
+                .iter()
+                .find(|o| rest.starts_with(o.as_bytes()) && rest.get(o.len()).is_some_and(|c| VOWELS.contains(c)));
             match onset {
                 Some(o) => i += o.len() + 1,
                 None => return false,
@@ -109,7 +106,16 @@ mod tests {
 
     #[test]
     fn recognises_romaji() {
-        for text in ["arigatou", "konnichiwa", "kore wa nan desu ka?", "gakkou e ikimasu", "ra-men", "matcha", "shinbun", "kyou wa ii tenki desu ne"] {
+        for text in [
+            "arigatou",
+            "konnichiwa",
+            "kore wa nan desu ka?",
+            "gakkou e ikimasu",
+            "ra-men",
+            "matcha",
+            "shinbun",
+            "kyou wa ii tenki desu ne",
+        ] {
             assert!(looks_like_romaji(text), "{text}");
         }
     }

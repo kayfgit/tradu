@@ -242,12 +242,8 @@ impl Translator {
         // also try when Japanese is one of the user's languages and the detected
         // language isn't.
         let script_lang = match &first.correction {
-            Some(c) if c.kind == CorrectionKind::Script && romaji::input_method(detected).is_some() => {
-                Some(detected)
-            }
-            _ if from == "auto" && in_pair("ja") && !in_pair(detected) && romaji::looks_like_romaji(text) => {
-                Some("ja")
-            }
+            Some(c) if c.kind == CorrectionKind::Script && romaji::input_method(detected).is_some() => Some(detected),
+            _ if from == "auto" && in_pair("ja") && !in_pair(detected) && romaji::looks_like_romaji(text) => Some("ja"),
             _ => None,
         };
         if let Some(lang) = script_lang {
@@ -333,7 +329,15 @@ impl Translator {
         let body = self
             .client
             .get(INPUT_TOOLS)
-            .query(&[("text", input.as_str()), ("itc", method), ("num", "1"), ("cp", "0"), ("cs", "1"), ("ie", "utf-8"), ("oe", "utf-8")])
+            .query(&[
+                ("text", input.as_str()),
+                ("itc", method),
+                ("num", "1"),
+                ("cp", "0"),
+                ("cs", "1"),
+                ("ie", "utf-8"),
+                ("oe", "utf-8"),
+            ])
             .send()
             .await
             .ok()?
@@ -415,24 +419,18 @@ pub fn parse(json: &Value, input: &str) -> Translation {
         .filter_map(|d| {
             Some(DictEntry {
                 pos: d["pos"].as_str().unwrap_or_default().to_owned(),
-                terms: d["terms"]
-                    .as_array()?
-                    .iter()
-                    .filter_map(|t| t.as_str().map(str::to_owned))
-                    .collect(),
+                terms: d["terms"].as_array()?.iter().filter_map(|t| t.as_str().map(str::to_owned)).collect(),
                 base: non_empty(&d["base_form"]),
             })
         })
         .collect();
-    out.correction = non_empty(&json["spell"]["spell_res"])
-        .filter(|s| s.trim() != input.trim())
-        .map(|text| {
-            let script = json["spell"]["correction_type"]
-                .as_array()
-                .is_some_and(|types| types.iter().any(|t| t.as_i64() == Some(6)));
-            let kind = if script { CorrectionKind::Script } else { CorrectionKind::Spelling };
-            Correction { text, kind }
-        });
+    out.correction = non_empty(&json["spell"]["spell_res"]).filter(|s| s.trim() != input.trim()).map(|text| {
+        let script = json["spell"]["correction_type"]
+            .as_array()
+            .is_some_and(|types| types.iter().any(|t| t.as_i64() == Some(6)));
+        let kind = if script { CorrectionKind::Script } else { CorrectionKind::Spelling };
+        Correction { text, kind }
+    });
     out
 }
 
@@ -485,8 +483,10 @@ mod tests {
     #[test]
     fn parses_corrections() {
         let spelling = parse(
-            &json(r#"{"sentences":[{"trans":"he runs fast"}],"src":"de",
-                "spell":{"spell_res":"er läuft schnell","correction_type":[1]}}"#),
+            &json(
+                r#"{"sentences":[{"trans":"he runs fast"}],"src":"de",
+                "spell":{"spell_res":"er läuft schnell","correction_type":[1]}}"#,
+            ),
             "er lauft schnell",
         );
         let c = spelling.correction.unwrap();
@@ -501,9 +501,8 @@ mod tests {
 
     #[test]
     fn parses_input_method_segments() {
-        let out = parse_input_method(&json(
-            r#"["SUCCESS",[["nihao",["你好"],[],{}],["woshixuesheng",["我是学生"],[],{}]]]"#,
-        ));
+        let out =
+            parse_input_method(&json(r#"["SUCCESS",[["nihao",["你好"],[],{}],["woshixuesheng",["我是学生"],[],{}]]]"#));
         assert_eq!(out.as_deref(), Some("你好我是学生"));
         assert_eq!(parse_input_method(&json(r#""INVALID_INPUT_METHOD_NAME""#)), None);
     }

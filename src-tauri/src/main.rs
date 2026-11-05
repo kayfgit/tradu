@@ -73,13 +73,8 @@ async fn translate(
     as_typed: Option<bool>,
 ) -> Result<translate::Translation, translate::Error> {
     let pair = pair.unwrap_or_default();
-    let request = translate::Request {
-        text: &text,
-        from: &from,
-        to: &to,
-        pair: &pair,
-        as_typed: as_typed.unwrap_or(false),
-    };
+    let request =
+        translate::Request { text: &text, from: &from, to: &to, pair: &pair, as_typed: as_typed.unwrap_or(false) };
     state.translator.translate(request).await
 }
 
@@ -131,11 +126,7 @@ async fn speak(
 /// Saves a DeepL key after checking it works, returning this month's usage;
 /// an empty key removes it.
 #[tauri::command]
-async fn set_deepl(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    key: String,
-) -> Result<Option<deepl::Usage>, String> {
+async fn set_deepl(app: AppHandle, state: State<'_, AppState>, key: String) -> Result<Option<deepl::Usage>, String> {
     let mut config = state.config.lock().unwrap().clone();
     config.deepl_key = key.trim().to_owned();
     let usage = match config.deepl() {
@@ -216,8 +207,7 @@ fn set_clipboard(state: &AppState, text: String) -> Result<(), String> {
 }
 
 fn popup_in_front(app: &AppHandle) -> bool {
-    app.get_webview_window("main")
-        .is_some_and(|w| w.is_visible().unwrap_or(false) && w.is_focused().unwrap_or(false))
+    app.get_webview_window("main").is_some_and(|w| w.is_visible().unwrap_or(false) && w.is_focused().unwrap_or(false))
 }
 
 /// Tray and second-launch handler: hides the popup if it's in front, otherwise opens it.
@@ -319,9 +309,7 @@ fn paint_from_hotkey(app: &AppHandle) {
 
 /// Reads the selection the app just copied and puts the user's clipboard back.
 fn take_selection(state: &AppState, previous: Option<String>) -> Option<String> {
-    let selection = with_clipboard(state, |c| c.get_text())
-        .ok()
-        .filter(|t| !t.trim().is_empty());
+    let selection = with_clipboard(state, |c| c.get_text()).ok().filter(|t| !t.trim().is_empty());
     if let Some(previous) = previous {
         let _ = set_clipboard(state, previous);
     }
@@ -572,8 +560,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let autostart_on = app.autolaunch().is_enabled().unwrap_or(false);
     let show = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
     let paint = MenuItem::with_id(app, "paint", "Paint text on screen", true, None::<&str>)?;
-    let autostart =
-        CheckMenuItem::with_id(app, "autostart", "Start at login", true, autostart_on, None::<&str>)?;
+    let autostart = CheckMenuItem::with_id(app, "autostart", "Start at login", true, autostart_on, None::<&str>)?;
     let edit = MenuItem::with_id(app, "edit", "Edit config", true, None::<&str>)?;
     let reload = MenuItem::with_id(app, "reload", "Reload config", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
@@ -602,11 +589,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
             "paint" => paint_from_hotkey(app),
             "autostart" => {
                 let launcher = app.autolaunch();
-                let _ = if launcher.is_enabled().unwrap_or(false) {
-                    launcher.disable()
-                } else {
-                    launcher.enable()
-                };
+                let _ = if launcher.is_enabled().unwrap_or(false) { launcher.disable() } else { launcher.enable() };
                 let _ = autostart_item.set_checked(launcher.is_enabled().unwrap_or(false));
             }
             "edit" => config::open_in_editor(app),
@@ -615,12 +598,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
             _ => {}
         })
         .on_tray_icon_event(|tray, event| {
-            if let TrayIconEvent::Click {
-                button: MouseButton::Left,
-                button_state: MouseButtonState::Up,
-                ..
-            } = event
-            {
+            if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
                 toggle(tray.app_handle());
             }
         })

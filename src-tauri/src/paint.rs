@@ -15,13 +15,15 @@ use windows::Win32::Graphics::Direct3D11::{
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_MODE_ROTATION_IDENTITY, DXGI_MODE_ROTATION_UNSPECIFIED,
 };
-use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1, IDXGIOutput1, IDXGIResource, DXGI_OUTDUPL_FRAME_INFO};
+use windows::Win32::Graphics::Dxgi::{
+    CreateDXGIFactory1, IDXGIFactory1, IDXGIOutput1, IDXGIResource, DXGI_OUTDUPL_FRAME_INFO,
+};
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyState, ReleaseCapture, SetCapture, SetFocus, VK_BACK, VK_CONTROL, VK_ESCAPE, VK_OEM_4, VK_OEM_6,
-    VK_RETURN, VK_SHIFT,
+    GetKeyState, ReleaseCapture, SetCapture, SetFocus, VK_BACK, VK_CONTROL, VK_ESCAPE, VK_OEM_4, VK_OEM_6, VK_RETURN,
+    VK_SHIFT,
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
 
@@ -253,9 +255,20 @@ unsafe fn overlay(shot: Image, area: RECT) -> Option<Painted> {
 
     let scale = GetDpiForWindow(hwnd) as f32 / 96.0;
     let font = CreateFontW(
-        -(13.0 * scale) as i32, 0, 0, 0, FW_NORMAL.0 as i32, 0, 0, 0,
-        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-        (FIXED_PITCH.0 | FF_MODERN.0) as u32, w!("Consolas"),
+        -(13.0 * scale) as i32,
+        0,
+        0,
+        0,
+        FW_NORMAL.0 as i32,
+        0,
+        0,
+        0,
+        DEFAULT_CHARSET,
+        OUT_DEFAULT_PRECIS,
+        CLIP_DEFAULT_PRECIS,
+        CLEARTYPE_QUALITY,
+        (FIXED_PITCH.0 | FF_MODERN.0) as u32,
+        w!("Consolas"),
     );
     let mut cursor = POINT::default();
     let _ = GetCursorPos(&mut cursor);
@@ -317,7 +330,7 @@ impl Overlay {
     /// The dimmed screenshot, with every stroke lit up again.
     fn redraw_canvas(&mut self) {
         let shot = std::mem::take(&mut self.shot.pixels);
-        for (out, src) in self.canvas().chunks_exact_mut(4).zip(shot.chunks_exact(4)) {
+        for (out, src) in self.canvas().as_chunks_mut::<4>().0.iter_mut().zip(shot.as_chunks::<4>().0) {
             for c in 0..3 {
                 out[c] = ((src[c] as u32 * 100) >> 8) as u8;
             }
@@ -361,8 +374,8 @@ impl Overlay {
                 }
                 self.mask[i] = 1;
                 // Lit up, with a touch of amber.
-                for c in 0..3 {
-                    let v = self.shot.pixels[i * 4 + c] as u32 * 226 + AMBER[c] as u32 * 30;
+                for (c, &amber) in AMBER.iter().enumerate() {
+                    let v = self.shot.pixels[i * 4 + c] as u32 * 226 + amber as u32 * 30;
                     unsafe { *canvas.add(i * 4 + c) = (v >> 8) as u8 };
                 }
             }
@@ -612,8 +625,14 @@ mod tests {
         let (monitor, area) = monitor_under_cursor();
         for (name, shot) in [("dxgi", unsafe { capture_dxgi(monitor) }), ("gdi", unsafe { capture_gdi(area) })] {
             let shot = shot.unwrap_or_else(|e| panic!("{name}: {e}"));
-            let lit = shot.pixels.chunks_exact(4).filter(|p| p[0] as u32 + p[1] as u32 + p[2] as u32 > 30).count();
-            println!("{name}: {}x{}, {:.0}% not black", shot.width, shot.height, lit as f64 * 100.0 / (shot.width * shot.height) as f64);
+            let lit =
+                shot.pixels.as_chunks::<4>().0.iter().filter(|p| p[0] as u32 + p[1] as u32 + p[2] as u32 > 30).count();
+            println!(
+                "{name}: {}x{}, {:.0}% not black",
+                shot.width,
+                shot.height,
+                lit as f64 * 100.0 / (shot.width * shot.height) as f64
+            );
             assert_eq!((shot.width, shot.height), (area.right - area.left, area.bottom - area.top));
             assert!(lit > 0);
         }
@@ -624,7 +643,8 @@ mod tests {
     #[test]
     #[ignore = "opens a window"]
     fn paints_and_reads() {
-        let mut shot = crate::ocr::tests::render(&["Erhöht den Schaden um 20 Prozent", "Gewährt zusätzliche Lauftempo"], 18);
+        let mut shot =
+            crate::ocr::tests::render(&["Erhöht den Schaden um 20 Prozent", "Gewährt zusätzliche Lauftempo"], 18);
         // Room for the key hints above the text.
         let top = 60;
         let mut pixels = shot.pixels[..(shot.width * top * 4) as usize].to_vec();
@@ -657,7 +677,7 @@ mod tests {
                 let _ = PrintWindow(hwnd, memory, PRINT_WINDOW_FLAGS(0));
                 let pixels = std::slice::from_raw_parts(bits, (w * h * 4) as usize);
                 let mut file = format!("P6\n{w} {h}\n255\n").into_bytes();
-                for p in pixels.chunks_exact(4) {
+                for p in pixels.as_chunks::<4>().0 {
                     file.extend([p[2], p[1], p[0]]);
                 }
                 std::fs::write(path, file).unwrap();

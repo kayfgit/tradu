@@ -44,8 +44,9 @@ pub struct Engine {
 pub fn engine(lang: &str) -> Result<Engine, EngineError> {
     let other = |e: windows::core::Error| EngineError::Other(format!("Text recognition failed: {}", e.message()));
     if lang.is_empty() {
-        let ocr = OcrEngine::TryCreateFromUserProfileLanguages()
-            .map_err(|_| EngineError::Other("Windows has no text recognition for your languages: :ocr de picks one".into()))?;
+        let ocr = OcrEngine::TryCreateFromUserProfileLanguages().map_err(|_| {
+            EngineError::Other("Windows has no text recognition for your languages: :ocr de picks one".into())
+        })?;
         return Ok(Engine { ocr, lang: String::new(), exact: true });
     }
     let wanted = lang.to_ascii_lowercase();
@@ -116,13 +117,40 @@ fn same_language(wanted: &str, tag: &str) -> bool {
 /// The PowerShell line (run as admin) that installs the recognizer for `lang`.
 pub fn install_command(lang: &str) -> String {
     let tag = match lang {
-        "en" => "en-US", "de" => "de-DE", "fr" => "fr-FR", "es" => "es-ES", "it" => "it-IT",
-        "pt" => "pt-BR", "ja" => "ja-JP", "ko" => "ko-KR", "ru" => "ru-RU", "pl" => "pl-PL",
-        "nl" => "nl-NL", "sv" => "sv-SE", "da" => "da-DK", "fi" => "fi-FI", "no" | "nb" => "nb-NO",
-        "tr" => "tr-TR", "cs" => "cs-CZ", "el" => "el-GR", "hu" => "hu-HU", "ro" => "ro-RO",
-        "ar" => "ar-SA", "zh-CN" => "zh-CN", "zh-TW" => "zh-TW", "sk" => "sk-SK", "hr" => "hr-HR",
-        "sr" => "sr-Latn-RS", "bg" => "bg-BG", "sl" => "sl-SI", "uk" => "uk-UA",
-        other => return format!("Get-WindowsCapability -Online -Name 'Language.OCR*{other}*' | Add-WindowsCapability -Online"),
+        "en" => "en-US",
+        "de" => "de-DE",
+        "fr" => "fr-FR",
+        "es" => "es-ES",
+        "it" => "it-IT",
+        "pt" => "pt-BR",
+        "ja" => "ja-JP",
+        "ko" => "ko-KR",
+        "ru" => "ru-RU",
+        "pl" => "pl-PL",
+        "nl" => "nl-NL",
+        "sv" => "sv-SE",
+        "da" => "da-DK",
+        "fi" => "fi-FI",
+        "no" | "nb" => "nb-NO",
+        "tr" => "tr-TR",
+        "cs" => "cs-CZ",
+        "el" => "el-GR",
+        "hu" => "hu-HU",
+        "ro" => "ro-RO",
+        "ar" => "ar-SA",
+        "zh-CN" => "zh-CN",
+        "zh-TW" => "zh-TW",
+        "sk" => "sk-SK",
+        "hr" => "hr-HR",
+        "sr" => "sr-Latn-RS",
+        "bg" => "bg-BG",
+        "sl" => "sl-SI",
+        "uk" => "uk-UA",
+        other => {
+            return format!(
+                "Get-WindowsCapability -Online -Name 'Language.OCR*{other}*' | Add-WindowsCapability -Online"
+            )
+        }
     };
     format!("Add-WindowsCapability -Online -Name \"Language.OCR~~~{tag}~0.0.1.0\"")
 }
@@ -188,7 +216,13 @@ fn recognize_lines(
     let max = OcrEngine::MaxImageDimension()? as i32;
     // Windows OCR reads large text best: enlarge small crops.
     // (3x reads worse than 2x or 4x in tests: words come apart.)
-    let mut scale = if h <= 120 { 4 } else if h <= 600 { 2 } else { 1 };
+    let mut scale = if h <= 120 {
+        4
+    } else if h <= 600 {
+        2
+    } else {
+        1
+    };
     while scale > 1 && (w * scale > max || h * scale > max) {
         scale -= 1;
     }
@@ -213,7 +247,8 @@ fn recognize_lines(
             let rect = [crop[0] as f32 + r.X / s, crop[1] as f32 + r.Y / s, r.Width / s, r.Height / s];
             words.push(Word { text: word.Text()?.to_string(), rect });
         }
-        let words: Vec<Word> = rejoin_split_words(words).into_iter().filter(|w| painted_over(painted, w.rect)).collect();
+        let words: Vec<Word> =
+            rejoin_split_words(words).into_iter().filter(|w| painted_over(painted, w.rect)).collect();
         if !words.is_empty() {
             lines.push(words);
         }
@@ -341,7 +376,11 @@ fn prepare(shot: &Image, [x0, y0, x1, y1]: [i32; 4], scale: i32, clean: bool) ->
                 let at = |x: i32, y: i32| {
                     if clean {
                         let v = (luma(x0 + x, y0 + y).saturating_sub(low) * 255 / range) as f32;
-                        if invert { 255.0 - v } else { v }
+                        if invert {
+                            255.0 - v
+                        } else {
+                            v
+                        }
                     } else {
                         shot.pixels[(((y0 + y) * shot.width + x0 + x) * 4) as usize + c] as f32
                     }
@@ -384,12 +423,26 @@ pub mod tests {
             let bitmap = CreateDIBSection(Some(dc), &info, DIB_RGB_COLORS, &mut bits, None, 0).unwrap();
             SelectObject(dc, bitmap.into());
             let pixels = std::slice::from_raw_parts_mut(bits as *mut u8, (width * height * 4) as usize);
-            for (i, p) in pixels.chunks_exact_mut(4).enumerate() {
+            for (i, p) in pixels.as_chunks_mut::<4>().0.iter_mut().enumerate() {
                 let n = ((i * 2654435761) >> 7) as u8 % 24;
-                p.copy_from_slice(&[30 + n, 24 + n, 18 + n, 255]);
+                *p = [30 + n, 24 + n, 18 + n, 255];
             }
-            let font = CreateFontW(-size, 0, 0, 0, 600, 0, 0, 0, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
-                CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY, 0, w!("Segoe UI"));
+            let font = CreateFontW(
+                -size,
+                0,
+                0,
+                0,
+                600,
+                0,
+                0,
+                0,
+                DEFAULT_CHARSET,
+                OUT_DEFAULT_PRECIS,
+                CLIP_DEFAULT_PRECIS,
+                ANTIALIASED_QUALITY,
+                0,
+                w!("Segoe UI"),
+            );
             SelectObject(dc, font.into());
             SetBkMode(dc, TRANSPARENT);
             for (i, line) in lines.iter().enumerate() {

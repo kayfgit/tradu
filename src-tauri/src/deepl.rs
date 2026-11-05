@@ -15,7 +15,11 @@ pub struct Deepl {
 impl Deepl {
     /// Free-plan keys end in ":fx" and have a host of their own.
     fn endpoint(&self) -> &'static str {
-        if self.key.ends_with(":fx") { "https://api-free.deepl.com" } else { "https://api.deepl.com" }
+        if self.key.ends_with(":fx") {
+            "https://api-free.deepl.com"
+        } else {
+            "https://api.deepl.com"
+        }
     }
 
     fn auth(&self) -> String {
@@ -161,9 +165,12 @@ mod tests {
 
     #[test]
     fn parses_translation() {
-        let t = parse(&serde_json::from_str(
-            r#"{"translations":[{"detected_source_language":"DE","text":"I'll send you the documents."}]}"#,
-        ).unwrap());
+        let t = parse(
+            &serde_json::from_str(
+                r#"{"translations":[{"detected_source_language":"DE","text":"I'll send you the documents."}]}"#,
+            )
+            .unwrap(),
+        );
         assert_eq!(t.text, "I'll send you the documents.");
         assert_eq!(t.detected.as_deref(), Some("de"));
         assert_eq!(t.provider, "deepl");
@@ -173,7 +180,9 @@ mod tests {
     fn explains_errors() {
         assert!(error(403, "").message.contains("rejected the key"));
         assert!(error(456, "").message.contains("quota"));
-        assert!(error(400, r#"{"message":"Value for 'target_lang' not supported."}"#).message.contains("doesn't support"));
+        assert!(error(400, r#"{"message":"Value for 'target_lang' not supported."}"#)
+            .message
+            .contains("doesn't support"));
     }
 
     #[test]

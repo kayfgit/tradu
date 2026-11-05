@@ -1,7 +1,10 @@
-'use strict';
+// Languages, and matching typed names to them. Kept free of the DOM so tests
+// can import it.
 
-// [Google code, English name, native name]
-const LANGS = [
+/** @typedef {[code: string, name: string, native: string]} Lang */
+
+/** @type {Lang[]} [Google code, English name, native name] */
+export const LANGS = [
   ['af', 'Afrikaans', 'Afrikaans'],
   ['sq', 'Albanian', 'Shqip'],
   ['am', 'Amharic', 'አማርኛ'],
@@ -142,7 +145,90 @@ const LANGS = [
 ];
 
 // Ranked first when queries tie, and fill the quick-pick list before any recents exist.
-const POPULAR = ['en', 'es', 'fr', 'de', 'zh-CN', 'ja', 'ko', 'pt', 'ru', 'it', 'ar', 'hi', 'tr', 'nl', 'pl', 'uk', 'vi', 'id', 'sv', 'zh-TW'];
+export const POPULAR = [
+  'en',
+  'es',
+  'fr',
+  'de',
+  'zh-CN',
+  'ja',
+  'ko',
+  'pt',
+  'ru',
+  'it',
+  'ar',
+  'hi',
+  'tr',
+  'nl',
+  'pl',
+  'uk',
+  'vi',
+  'id',
+  'sv',
+  'zh-TW',
+];
 
 // Codes users (or Google's detector) may use for languages listed under another code.
-const ALIASES = { he: 'iw', jv: 'jw', zh: 'zh-CN', fil: 'tl', nb: 'no', 'pt-BR': 'pt' };
+export const ALIASES = { he: 'iw', jv: 'jw', zh: 'zh-CN', fil: 'tl', nb: 'no', 'pt-BR': 'pt' };
+
+/** @type {Lang} */
+export const AUTO = ['auto', 'Detect language', ''];
+export const byCode = new Map(LANGS.map(l => [l[0], l]));
+/** @param {string} code */
+export const canon = code => ALIASES[code] ?? code;
+/** @param {string} code */
+export const nameOf = code => (code === 'auto' ? 'Detect language' : (byCode.get(canon(code))?.[1] ?? code));
+
+/** Lowercase, without accents, so "francais" finds "Français". */
+export const normalize = s => s.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
+
+/**
+ * How well `q` (normalized) matches a language; 0 is no match.
+ * @param {Lang} lang
+ * @param {string} q
+ */
+export function score([code, name, native], q) {
+  const n = normalize(name);
+  const nat = normalize(native);
+  const c = code.toLowerCase();
+  if (c === q || canon(q) === code) return 100;
+  if (n.startsWith(q)) return 80;
+  if (nat.startsWith(q)) return 75;
+  if (n.split(/[^a-z]+/).some(w => w.startsWith(q))) return 60;
+  if (c.startsWith(q)) return 50;
+  if (n.includes(q) || nat.includes(q)) return 40;
+  let i = 0;
+  for (const ch of n) if (ch === q[i]) i++;
+  return i === q.length ? 10 : 0;
+}
+
+/**
+ * The languages offered for `query` in the source ("from") or target ("to")
+ * picker, best first. `recent` are this side's recently used codes, newest first.
+ * @param {'from' | 'to'} which
+ * @param {string} query
+ * @param {string[]} recent
+ */
+export function findMatches(which, query, recent) {
+  const pool = which === 'from' ? [AUTO, ...LANGS] : LANGS;
+  const q = normalize(query.trim());
+  if (!q) {
+    // Quick-pick list: recents first, topped up with popular languages.
+    const head = which === 'from' ? [...recent, 'auto'] : recent;
+    return [...new Set([...head, ...POPULAR])]
+      .map(c => (c === 'auto' ? AUTO : byCode.get(c)))
+      .filter(Boolean)
+      .slice(0, 9);
+  }
+  const bonus = code => {
+    const r = recent.indexOf(code);
+    const p = POPULAR.indexOf(code);
+    return (r >= 0 ? 6 - r * 0.1 : 0) + (p >= 0 ? 3 - p * 0.05 : 0);
+  };
+  return pool
+    .map(lang => ({ lang, s: score(lang, q) }))
+    .filter(m => m.s > 0)
+    .sort((a, b) => b.s + bonus(b.lang[0]) - (a.s + bonus(a.lang[0])))
+    .slice(0, 8)
+    .map(m => m.lang);
+}

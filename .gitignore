@@ -16,3 +16,6 @@ desktop.ini
 
 # /brag-slim working output (the final video is copied to docs/)
 /brag-output*/
+
+# JS dev tooling
+node_modules/

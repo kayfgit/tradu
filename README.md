@@ -205,6 +205,24 @@ For the installer, run `cargo install tauri-cli --version "^2" --locked` once, t
 
 To try changes before releasing them, `.\install-local.ps1` builds the installer, installs it where the one-line installer puts releases (your config and history are kept), and restarts tradu.
 
+### Checks
+
+CI runs these on every push and pull request. Node is only needed for the frontend's checks, not to build tradu.
+
+```bash
+cd src-tauri
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo test
+```
+
+```bash
+npm ci
+npm run check    # Prettier, ESLint, TypeScript (on the JS, via JSDoc) and the tests in tests/
+```
+
+`npm run format` and `cargo fmt` fix formatting.
+
 ### Releasing
 
 Bump `version` in `src-tauri/tauri.conf.json`, commit, then push a matching tag:
@@ -224,7 +242,7 @@ To iterate on the UI without rebuilding, serve `src/` (for example `python -m ht
 ## How it's built
 
 - **Tauri 2 / Rust backend** (`src-tauri/src`): global hotkey (plus a keyboard hook in `hook.rs` for games that block hotkeys), tray, single instance, clipboard, and translation requests. `origin.rs` handles the app you came from: reading its selection and pasting back into it. `paint.rs` freezes the screen (Desktop Duplication, so borderless games are captured too) and draws the brush overlay with plain Win32 instead of a second web view; `ocr.rs` reads the painted words with `Windows.Media.Ocr`. The HTTP connection is warmed up when the popup opens, so the first translation doesn't pay for a TLS handshake.
-- **Frontend** (`src/`): plain HTML, CSS and JS with no framework or bundler. All the keyboard logic is in `main.js`. It's set in JetBrains Mono when that's installed, falling back to Cascadia Mono, then Consolas, so no font is bundled.
+- **Frontend** (`src/`): plain HTML, CSS and JS with no framework or bundler. All the keyboard logic is in `main.js`; the language list and fuzzy matching are in `langs.js`, an ES module with no DOM code, so the tests can import it. It's set in JetBrains Mono when that's installed, falling back to Cascadia Mono, then Consolas, so no font is bundled.
 - WebView2 runs with software rendering, and the network service runs inside the main process. For a small text UI this halves memory, from about 160 MB to about 80 MB.
 
 **Why not a GPU-native toolkit (egui, iced)?** A translator has to render *every* script correctly: Arabic and Hebrew right-to-left, Devanagari and Thai shaping, CJK glyph variants. It also needs working IME input for Japanese, Chinese and Korean. The system web engine gets all of that right for free, and the lighter toolkits still don't.
