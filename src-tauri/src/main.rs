@@ -3,6 +3,8 @@
 mod config;
 mod deepl;
 #[cfg(windows)]
+mod hook;
+#[cfg(windows)]
 mod ocr;
 mod origin;
 #[cfg(windows)]
@@ -400,12 +402,12 @@ fn resize_window(window: WebviewWindow, dw: f64, dh: f64) {
 
 /// Remembers where `:move` ("position") or `:resize` ("size") left the popup.
 #[tauri::command]
-fn save_placement(
-    app: AppHandle,
-    window: WebviewWindow,
-    state: State<'_, AppState>,
-    what: String,
-) -> Result<(), String> {
+fn save_placement(window: WebviewWindow, what: String) -> Result<(), String> {
+    remember_placement(&window, &what)
+}
+
+fn remember_placement(window: &WebviewWindow, what: &str) -> Result<(), String> {
+    let state = window.state::<AppState>();
     let scale = window.scale_factor().map_err(|e| e.to_string())?;
     let mut config = state.config.lock().unwrap().clone();
     if what == "position" {
@@ -417,9 +419,72 @@ fn save_placement(
         let size = window.inner_size().map_err(|e| e.to_string())?.to_logical::<f64>(scale);
         config.window_size = Some([size.width, size.height]);
     }
-    config::save(&app, &config).map_err(|e| format!("Couldn't save the config: {e}"))?;
+    config::save(window.app_handle(), &config).map_err(|e| format!("Couldn't save the config: {e}"))?;
     *state.config.lock().unwrap() = config;
     Ok(())
+}
+
+/// Dragging the popup or its edges: once the mouse button is let go, it's
+/// remembered like `:move` and `:resize`. Moves without the button held are
+/// tradu's own (opening it on the monitor under the mouse) or the keyboard's.
+#[cfg(windows)]
+fn remember_drag(window: &WebviewWindow, resized: bool) {
+    use std::sync::atomic::AtomicU8;
+    const MOVED: u8 = 1;
+    const RESIZED: u8 = 2;
+    static DRAGGED: AtomicU8 = AtomicU8::new(0);
+
+    if !mouse_button_down() {
+        return;
+    }
+    // The first event of a drag starts the wait; the rest only add to what changed.
+    if DRAGGED.fetch_or(if resized { RESIZED } else { MOVED }, Ordering::SeqCst) != 0 {
+        return;
+    }
+    let window = window.clone();
+    std::thread::spawn(move || {
+        while mouse_button_down() {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        // Resizing from the left or top edge moves the popup too.
+        let dragged = DRAGGED.swap(0, Ordering::SeqCst);
+        if dragged & MOVED != 0 {
+            let _ = remember_placement(&window, "position");
+        }
+        if dragged & RESIZED != 0 {
+            let _ = remember_placement(&window, "size");
+        }
+    });
+}
+
+#[cfg(windows)]
+fn mouse_button_down() -> bool {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON, VK_RBUTTON};
+    [VK_LBUTTON, VK_RBUTTON].iter().any(|vk| unsafe { GetAsyncKeyState(vk.0 as i32) } as u16 & 0x8000 != 0)
+}
+
+/// Whether the window in front is one of tradu's own.
+#[cfg(windows)]
+fn foreground_is_ours() -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
+    let mut pid = 0;
+    unsafe { GetWindowThreadProcessId(GetForegroundWindow(), Some(&mut pid)) };
+    pid == std::process::id()
+}
+
+/// Once a drag of the popup ends, the focus goes back into the web view, so
+/// typing carries on in the input.
+#[cfg(windows)]
+fn refocus_after_drag(window: &WebviewWindow) {
+    let window = window.clone();
+    std::thread::spawn(move || {
+        while mouse_button_down() {
+            std::thread::sleep(Duration::from_millis(30));
+        }
+        if window.is_visible().unwrap_or(false) && foreground_is_ours() {
+            let _ = window.as_ref().set_focus();
+        }
+    });
 }
 
 /// `:move reset` / `:resize reset`: back to centered, or to the default size.
@@ -452,25 +517,45 @@ fn register_hotkey(app: &AppHandle) {
     let shortcuts = app.global_shortcut();
     let _ = shortcuts.unregister_all();
     let mut errors = Vec::new();
-    if let Err(e) = shortcuts.register(hotkey.as_str()) {
-        errors.push(format!("Couldn't register hotkey \"{hotkey}\": {e}"));
+    let mut registered = Vec::new();
+    match hotkey.parse::<Shortcut>() {
+        Ok(shortcut) => match shortcuts.register(shortcut) {
+            Ok(()) => registered.push(shortcut),
+            Err(e) => errors.push(format!("Couldn't register hotkey \"{hotkey}\": {e}")),
+        },
+        Err(e) => errors.push(format!("Couldn't read hotkey \"{hotkey}\": {e}")),
     }
     let mut paint = None;
     if !paint_hotkey.is_empty() {
         match paint_hotkey.parse::<Shortcut>() {
             Ok(shortcut) => match shortcuts.register(shortcut) {
-                Ok(()) => paint = Some(shortcut),
+                Ok(()) => {
+                    paint = Some(shortcut);
+                    registered.push(shortcut);
+                }
                 Err(e) => errors.push(format!("Couldn't register paint hotkey \"{paint_hotkey}\": {e}")),
             },
             Err(e) => errors.push(format!("Couldn't read paint hotkey \"{paint_hotkey}\": {e}")),
         }
     }
+    // Only the ones tradu holds: a hotkey another app owns stays theirs.
+    #[cfg(windows)]
+    hook::watch(&registered);
     let error = (!errors.is_empty()).then(|| errors.join(" · "));
     if let Some(e) = &error {
         eprintln!("{e}");
     }
     *state.paint_shortcut.lock().unwrap() = paint;
     *state.hotkey_error.lock().unwrap() = error;
+}
+
+fn on_hotkey(app: &AppHandle, shortcut: &Shortcut) {
+    let paint = *app.state::<AppState>().paint_shortcut.lock().unwrap();
+    if paint.as_ref() == Some(shortcut) {
+        paint_from_hotkey(app);
+    } else {
+        summon_from_hotkey(app);
+    }
 }
 
 fn reload_config(app: &AppHandle) {
@@ -551,14 +636,8 @@ fn main() {
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, shortcut, event| {
-                    if event.state() != ShortcutState::Pressed {
-                        return;
-                    }
-                    let paint = *app.state::<AppState>().paint_shortcut.lock().unwrap();
-                    if paint.as_ref() == Some(shortcut) {
-                        paint_from_hotkey(app);
-                    } else {
-                        summon_from_hotkey(app);
+                    if event.state() == ShortcutState::Pressed {
+                        on_hotkey(app, shortcut);
                     }
                 })
                 .build(),
@@ -577,6 +656,11 @@ fn main() {
                 clipboard: Mutex::new(None),
                 previous_window: Mutex::new(0),
             });
+            #[cfg(windows)]
+            {
+                let app = handle.clone();
+                hook::install(move |shortcut| on_hotkey(&app, &shortcut));
+            }
             register_hotkey(handle);
             build_tray(handle)?;
 
@@ -587,11 +671,22 @@ fn main() {
             let w = window.clone();
             window.on_window_event(move |event| match event {
                 WindowEvent::Focused(false) => {
+                    // Dragging the popup or its edges takes the focus from the web
+                    // view too, but to tradu's own window: that isn't clicking away.
+                    #[cfg(windows)]
+                    if foreground_is_ours() {
+                        return refocus_after_drag(&w);
+                    }
+                    let _ = w.emit("left", ());
                     let hide_on_blur = w.state::<AppState>().config.lock().unwrap().hide_on_blur;
                     if hide_on_blur {
                         let _ = w.hide();
                     }
                 }
+                #[cfg(windows)]
+                WindowEvent::Moved(_) => remember_drag(&w, false),
+                #[cfg(windows)]
+                WindowEvent::Resized(_) => remember_drag(&w, true),
                 WindowEvent::CloseRequested { api, .. } => {
                     api.prevent_close();
                     let _ = w.hide();
