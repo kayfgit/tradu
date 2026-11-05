@@ -73,10 +73,7 @@ impl Config {
 const OLD_DEFAULT_DEBOUNCE_MS: u64 = 200;
 
 pub fn path(app: &AppHandle) -> PathBuf {
-    app.path()
-        .app_config_dir()
-        .unwrap_or_else(|_| PathBuf::from("."))
-        .join("config.json")
+    app.path().app_config_dir().unwrap_or_else(|_| PathBuf::from(".")).join("config.json")
 }
 
 /// Reads the config, writing the defaults on first run so there's a file to edit.
