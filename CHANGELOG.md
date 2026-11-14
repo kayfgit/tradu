@@ -13,6 +13,7 @@ What changed in each version of tradu.
 
 ### Changed
 
+- tradu is now licensed under the GNU GPL v3 or later (GPL-3.0-or-later), copyright Kayf; it was MIT.
 - `:` always opens the command line, and whatever you'd typed comes back afterwards.
 
 ### Fixed
